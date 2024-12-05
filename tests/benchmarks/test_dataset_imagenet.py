@@ -5,7 +5,7 @@ from torch.utils.data import (
     BatchSampler,
     RandomSampler,
 )
-from src.data.components.utils import sample_and_stitch
+from data.components.sampling_utils import sample_and_stitch
 import torchvision.transforms as TT
 from PIL import Image
 from typing import Any, Literal

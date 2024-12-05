@@ -7,7 +7,7 @@ from torch.utils.data import (
     RandomSampler,
     SequentialSampler,
 )
-from src.data.components.utils import sample_and_stitch
+from data.components.sampling_utils import sample_and_stitch
 from torchvision.transforms.functional import to_tensor
 import torchvision.transforms as TT
 from PIL import Image

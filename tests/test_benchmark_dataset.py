@@ -1,7 +1,7 @@
 import torch
 from torchvision.datasets import CIFAR10
 from torch.utils.data import Dataset, DataLoader, BatchSampler, RandomSampler, SequentialSampler
-from src.data.components.utils import sample_and_stitch
+from data.components.sampling_utils import sample_and_stitch
 from torchvision.transforms.functional import to_tensor
 from PIL import Image
 from typing import Any, Literal
