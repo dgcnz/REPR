@@ -44,7 +44,7 @@ def sample_and_stitch(
     img: Float[Tensor, "B C H W"],
     patch_size: int,
     mode: Literal["offgrid", "ongrid", "canonical"] = "offgrid",
-) -> Float[Tensor, "B C H W"]:
+) -> tuple[Float[Tensor, "B C H W"], Int[Tensor, "B N 2"]]:
     """
     Sample patches from an image and stitch them back together.
 
@@ -67,26 +67,28 @@ def sample_and_stitch(
     else:
         raise ValueError("Invalid mode, choose from ['offgrid', 'ongrid', 'canonical']")
 
+    idx = torch.stack([ys, xs], dim=-1)
+
     # Creating sampling grid
     indices = _create_sampled_grid_flattened(patch_size, H, W, ys, xs)
     indices: Int[Tensor, "B C H*W"] = indices.unsqueeze(1).expand(-1, C, -1)
-    output = img.flatten(-2).gather(2, indices).unflatten(-1, (H, W))
-    return output
+    new_img = img.flatten(-2).gather(2, indices).unflatten(-1, (H, W))
+    return new_img, idx
 
 
 def _sample_offgrid(
     B: int, H: int, W: int, patch_size: int, device: torch.device = "cpu"
 ) -> tuple[Int[Tensor, "B N"], Int[Tensor, "B N"]]:
     """
-    Sample random patches off-grid. 
-    
+    Sample random patches off-grid.
+
     Note: Each patch is represented by the top-left corner.
 
     :param B: Batch size
     :param H: Height of the image
     :param W: Width of the image
     :param patch_size: Size of the patches to sample
-    :param device: Device to use    
+    :param device: Device to use
     """
     nW = W // patch_size
     nH = H // patch_size
@@ -111,7 +113,7 @@ def _sample_ongrid(
     :param W: Width of the image
     :param patch_size: Size of the patches to sample
     :param canonical: If true, the patches are just retrieved in canonical order
-    :param device: Device to use    
+    :param device: Device to use
     """
     nW = W // patch_size
     nH = H // patch_size
@@ -124,6 +126,7 @@ def _sample_ongrid(
     xs = xs * patch_size
     ys = ys * patch_size
     return ys, xs
+
 
 if __name__ == "__main__":
     from torchvision.datasets import CIFAR10
