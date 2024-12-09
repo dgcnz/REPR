@@ -7,6 +7,7 @@ from .memtracker import MemTracker
 class Runner(object):
     def __init__(self, request):
         self.request = request
+        self.metric_optim = dict()
 
     def benchmark(
         self,
@@ -32,7 +33,16 @@ class Runner(object):
         self._after_iter(events)
         stats = self._gather_stats(events) or {}
         self.request.node.user_properties.extend(stats.items())
+        self.request.node.user_properties.append(("n_runs", n_runs))
+        self.request.node.user_properties.append(("metric_optim", self.metric_optim))
 
+    def group_by(self, group_name: str):
+        # check that the group is not already in the user properties, otherwise throw error
+        for key, _ in self.request.node.user_properties:
+            if key == "group":
+                raise ValueError("Group already exists in user properties")
+        self.request.node.user_properties.append(("group", group_name))
+    
     def _after_warmup(self):
         pass
 
@@ -53,6 +63,16 @@ class CUDARunner(Runner):
     def __init__(self, request):
         super().__init__(request)
         self.mem_tracker = MemTracker()
+        self.metric_optim = {
+            "time/mean": "min",
+            "time/median": "min",
+            "time/stdev": "min",
+            "time/min": "min",
+            "time/max": "min",
+            "mem/max_reserved (MB)": "min",
+            "mem/max_used (MB)": "min",
+            "mem/max_tracked (MB)": "min",
+        }
 
     def _before_iter(self):
         torch.cuda.reset_peak_memory_stats()

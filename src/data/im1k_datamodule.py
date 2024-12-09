@@ -12,14 +12,12 @@ logging.basicConfig(level=logging.INFO)
 class IM1KDataModule(LightningDataModule):
     def __init__(
         self,
-        data_dir: str = "data/",
         batch_size: int = 64,
         num_workers: int = 0,
         pin_memory: bool = False,
     ) -> None:
         """Initialize a `MNISTDataModule`.
 
-        :param data_dir: The data directory. Defaults to `"data/"`.
         :param batch_size: The batch size. Defaults to `64`.
         :param num_workers: The number of workers. Defaults to `0`.
         :param pin_memory: Whether to pin memory. Defaults to `False`.
