@@ -8,7 +8,9 @@ from torchmetrics.regression import MeanSquaredError
 from src.data.components.sampling_utils import sample_and_stitch
 from src.models.components.part_vit import PARTViT, compute_gt_transform
 from jaxtyping import Float, Int
+import logging
 
+logging.basicConfig(level=logging.INFO)
 
 
 class PARTViTModule(LightningModule):
@@ -18,6 +20,8 @@ class PARTViTModule(LightningModule):
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler,
         compile: bool,
+        patch_size: int,
+        sample_mode: str = "offgrid",
     ) -> None:
         """Initialize a `MNISTLitModule`.
 
@@ -48,6 +52,7 @@ class PARTViTModule(LightningModule):
 
         # for tracking best so far validation accuracy
         self.val_acc_best = MaxMetric()
+        self.cli_logger = logging.getLogger(self.__class__.__name__)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Perform a forward pass through the model `self.net`.
@@ -64,6 +69,10 @@ class PARTViTModule(LightningModule):
         self.val_loss.reset()
         self.val_mse.reset()
         self.val_acc_best.reset()
+        if self.hparams.compile and self.trainer.accelerator == "cpu":
+            self.cli_logger.warning(
+                "Model compilation is enabled but the trainer is not using GPU. "
+            )
 
     def model_step(
         self, batch: tuple[Tensor, Tensor] | dict[str, Tensor]
@@ -162,7 +171,8 @@ class PARTViTModule(LightningModule):
         :param stage: Either `"fit"`, `"validate"`, `"test"`, or `"predict"`.
         """
         if self.hparams.compile and stage == "fit":
-            self.net = torch.compile(self.net)
+            self._model_step = self.model_step
+            self.model_step = torch.compile(self.model_step)
 
     def configure_optimizers(self) -> Dict[str, Any]:
         """Choose what optimizers and learning-rate schedulers to use in your optimization.

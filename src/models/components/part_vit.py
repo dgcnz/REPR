@@ -3,29 +3,37 @@ import timm
 import torch.nn as nn
 from torch import Tensor
 from jaxtyping import Float, Int
-import torch.nn.functional as F
 import math
-import timeit
-import lightning as L
-import logging
 from typing import Any
 from src.data.components.sampling_utils import sample_and_stitch
-
+from src.models.components.cross_attention import CrossAttention
 
 class PARTViT(nn.Module):
     def __init__(
         self,
         backbone: nn.Module,
         n_pairs: int,
-        embed_dim: int = 384,
+        embed_dim: int,
+        num_patches: int,
         head_type: str = "pairwise_mlp",
         num_targets: int = 2,  # 2: [dx, dy] 4: [dx, dy, dw, dh]
+        cross_attention_num_heads: int = None,
+        cross_attention_query_type: str = None,
     ):
         super().__init__()
         self.backbone = backbone
         self.n_pairs = n_pairs
+        self.head_type = head_type
         if head_type == "pairwise_mlp":
             self.head = nn.Linear(2 * embed_dim, num_targets)
+        elif self.head_type == "cross_attention":
+            assert cross_attention_num_heads is not None
+            assert cross_attention_query_type is not None
+            self.head = CrossAttention(embed_dim=embed_dim,
+                                        num_channels=num_targets,
+                                        num_patches=num_patches,
+                                        num_heads=cross_attention_num_heads,
+                                        query_type=cross_attention_query_type)
         else:
             raise NotImplementedError(f"Head type {head_type} not implemented")
 
@@ -40,10 +48,13 @@ class PARTViT(nn.Module):
 
         idx = torch.randint(n, (b, self.n_pairs), device=z.device)
         jdx = torch.randint(n, (b, self.n_pairs), device=z.device)
-        indices = torch.stack([idx, jdx], dim=2)
+        indices: Int[Tensor, "B n_pairs 2"] = torch.stack([idx, jdx], dim=2)
 
-        z: Float[Tensor, "b n_pairs 2 embed_dim"] = index_pairs(z, indices)
-        z: Float[Tensor, "b n_pairs 2"] = self.head(z.flatten(2, 3))
+        z_pairs: Float[Tensor, "b n_pairs 2 embed_dim"] = index_pairs(z, indices)
+        if self.head_type == "pairwise_mlp":
+            z: Float[Tensor, "b n_pairs 2"] = self.head(z_pairs.flatten(2, 3))
+        elif self.head_type == "cross_attention":
+            z: Float[Tensor, "b n_pairs 2"] = self.head(z, indices)
         return z, indices
 
 
@@ -86,15 +97,17 @@ if __name__ == "__main__":
     model = PARTViT(
         backbone=backbone,
         n_pairs=4,
-        embed_dim=768,
-        head_type="pairwise_mlp",
+        embed_dim=backbone.embed_dim,
+        num_patches=backbone.patch_embed.num_patches,
+        head_type="cross_attention",
         num_targets=2,
+        cross_attention_num_heads=4,
+        cross_attention_query_type="positional",
     )
     x = torch.randn(2, 3, 64, 64)
-    x, y = sample_and_stitch(x, 16, "offgrid")
-    model = torch.compile(model)
-    logits = model(x)
-    criterion = PARTLoss()
-    loss = criterion(*logits, y)
-    print(loss)
-    loss.backward()
+    x, patch_positions = sample_and_stitch(x, 16, "offgrid")
+    y_pred, patch_pair_indices = model(x) 
+    y_gt = compute_gt_transform(patch_pair_indices, patch_positions)
+    mse = nn.MSELoss()(y_pred, y_gt)
+    print(mse)
+

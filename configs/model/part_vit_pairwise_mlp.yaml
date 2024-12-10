@@ -1,0 +1,37 @@
+_target_: src.models.part_vit_module.PARTViTModule
+
+optimizer:
+  _target_: torch.optim.Adam
+  _partial_: true
+  lr: 0.001
+  weight_decay: 0.0
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  _partial_: true
+  mode: min
+  factor: 0.1
+  patience: 10
+
+net:
+  _target_: src.models.components.part_vit.PARTViT
+  backbone:
+    _target_: timm.create_model
+    model_name: vit_base_patch16_224
+    pretrained: False
+    num_classes: 0
+    global_pool: ""
+    class_token: False
+    pos_embed: "none"
+    embed_dim: 768
+    img_size: 224
+    patch_size: 16
+  n_pairs: 64
+  embed_dim: ${model.net.backbone.embed_dim}
+  num_patches: ${eval:'(${model.net.backbone.img_size} // ${model.net.backbone.patch_size})**2'}
+  head_type: "pairwise_mlp"
+
+patch_size: ${model.net.backbone.patch_size}
+sample_mode: "offgrid"
+# compile model for faster training with pytorch 2.0
+compile: false
