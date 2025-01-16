@@ -53,7 +53,7 @@ def sample_and_stitch(
     :param img: Input image of shape (B, C, H, W)
     :param patch_size: Size of the patches to sample
     :param mode: Sampling mode, choose from ['offgrid', 'ongrid', 'canonical']
-
+    :return: New image of shape (B, C, H, W) and positions (y, x) of each patch
     """
     B, C, H, W = img.size()
 
@@ -64,16 +64,24 @@ def sample_and_stitch(
         ys, xs = _sample_ongrid(B, H, W, patch_size, device=img.device)
     elif mode == "canonical":
         ys, xs = _sample_ongrid(B, H, W, patch_size, canonical=True, device=img.device)
+    elif mode == "ongrid_close_2":
+        ys, xs = _sample_ongrid_close(
+            B, H, W, patch_size, region_size=2, device=img.device
+        )
+    elif mode == "ongrid_close_4":
+        ys, xs = _sample_ongrid_close(
+            B, H, W, patch_size, region_size=4, device=img.device
+        )
     else:
         raise ValueError("Invalid mode, choose from ['offgrid', 'ongrid', 'canonical']")
 
-    idx = torch.stack([ys, xs], dim=-1)
+    patch_positions = torch.stack([ys, xs], dim=-1)
 
     # Creating sampling grid
     indices = _create_sampled_grid_flattened(patch_size, H, W, ys, xs)
     indices: Int[Tensor, "B C H*W"] = indices.unsqueeze(1).expand(-1, C, -1)
     new_img = img.flatten(-2).gather(2, indices).unflatten(-1, (H, W))
-    return new_img, idx
+    return new_img, patch_positions
 
 
 def _sample_offgrid(
@@ -128,19 +136,76 @@ def _sample_ongrid(
     return ys, xs
 
 
+def extract_k_by_k_blocks_nonoverlapping(x: Tensor, k: int) -> Tensor:
+    H, W = x.shape
+    assert H % k == 0 and W % k == 0, "H and W must be multiples of k"
+    x = x.view(H // k, k, W // k, k)
+    x = x.permute(0, 2, 1, 3)
+    x = x.contiguous().view(-1, k, k)
+    return x
+
+
+def extract_k_by_k_blocks(x: Tensor, k: int, stride: int) -> Tensor:
+    """
+    Extract k x k blocks from input tensor with given stride.
+    For floating-point types check: https://github.com/pytorch/pytorch/issues/44989
+    """
+    H, W = x.shape
+    assert k > 0 and stride > 0, "k and stride must be positive"
+    assert H >= k and W >= k, "Input dimensions must be >= k"
+
+    out_h = (H - k) // stride + 1
+    out_w = (W - k) // stride + 1
+    total_blocks = out_h * out_w
+
+    x = x.contiguous()
+    blocks = x.unfold(0, k, stride).unfold(1, k, stride).reshape(total_blocks, k, k)
+    return blocks  
+
+
+def _sample_ongrid_close(
+    B: int,
+    H: int,
+    W: int,
+    patch_size: int,
+    region_size: int = 2,
+    device: torch.device = "cpu",
+) -> tuple[Int[Tensor, "B N"], Int[Tensor, "B N"]]:
+    nH = H // patch_size
+    nW = W // patch_size
+    N = nH * nW
+    idx = torch.arange(0, N, device=device).reshape(nH, nW)
+    idx = extract_k_by_k_blocks_nonoverlapping(idx, region_size)
+    # idx = idx.reshape(-1, region_size**2)
+    idx = idx.flatten()
+    # randperm?
+    idx = idx.repeat(B, 1)
+    xs = idx % nW
+    ys = idx // nW
+    xs = xs * patch_size
+    ys = ys * patch_size
+    return ys, xs
+
+
 if __name__ == "__main__":
     from torchvision.datasets import CIFAR10
     from torchvision.transforms import ToTensor
     import matplotlib.pyplot as plt
 
-    patch_size = 4
-    dataset = CIFAR10(root="data/", download=True, train=False)
-    img, _ = dataset[0]
-    img = ToTensor()(img).unsqueeze(0)
+    # patch_size = 4
+    # dataset = CIFAR10(root="data/", download=True, train=False)
+    # img, _ = dataset[0]
+    # img = ToTensor()(img).unsqueeze(0)
 
-    sampler3 = sample_and_stitch
-    out = sampler3(img.cpu(), patch_size, "offgrid")
+    # sampler3 = sample_and_stitch
+    # out = sampler3(img.cpu(), patch_size, "offgrid")
 
-    fig, ax = plt.subplots(1)
-    ax.imshow(out.squeeze().permute(1, 2, 0))
-    fig.savefig("test.png")
+    # fig, ax = plt.subplots(1)
+    # ax.imshow(out.squeeze().permute(1, 2, 0))
+    # fig.savefig("test.png")
+
+    # Test extract_k_by_k_blocks
+    x = torch.arange(25).reshape(5, 5)
+    print(x)
+    blocks = extract_k_by_k_blocks(x, 4, 1)
+    print(blocks)

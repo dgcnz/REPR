@@ -1,0 +1,6 @@
+ema:
+  _target_: src.callbacks.ema.EMA
+  decay: 0.99996
+  validate_original_weights: false
+  every_n_steps: 1
+  cpu_offload: true

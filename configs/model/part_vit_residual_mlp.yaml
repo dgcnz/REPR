@@ -3,6 +3,7 @@ _target_: src.models.part_vit_module.PARTViTModule
 defaults:
   - /scheduler: deit_cosine_sched
   - /optimizer: deit_adamw
+  - criterion_fn: mse
 
 net:
   _target_: src.models.components.part_vit.PARTViT
@@ -15,16 +16,19 @@ net:
     class_token: False
     pos_embed: "none"
     embed_dim: 768
-    img_size: 224
+    img_size: ???
     patch_size: 16
-  n_pairs: 64
   embed_dim: ${model.net.backbone.embed_dim}
   num_patches: ${eval:'(${model.net.backbone.img_size} // ${model.net.backbone.patch_size})**2'}
-  head_type: "cross_attention"
-  cross_attention_num_heads: 4
-  cross_attention_query_type: "positional"
+  head_type: "residual_mlp"
+  logit_scale_init: ${model.net.backbone.img_size}
+  logit_scale_tanh: True
 
+symmetry_penalty: 0.005
 patch_size: ${model.net.backbone.patch_size}
 sample_mode: "offgrid"
+pair_sampler:
+  _target_: src.models.components.part_utils.get_all_pairs
+  _partial_: true
 # compile model for faster training with pytorch 2.0
 compile: false

@@ -36,9 +36,22 @@ from src.utils import (
     task_wrapper,
 )
 from omegaconf import OmegaConf
+import importlib
 
 log = RankedLogger(__name__, rank_zero_only=True)
+def ieval(expr):
+    return hydra.utils.get_object(expr)
+    paths = expr.split(".")
+    module = ".".join(paths[:-1])
+    obj = paths[-1]
+    print(module, obj)
+    module = importlib.import_module(module)
+    print(getattr(module, obj))
+    return getattr(module, obj)
+
+
 OmegaConf.register_new_resolver("eval", eval)
+OmegaConf.register_new_resolver("ieval", ieval)
 
 @task_wrapper
 def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:

@@ -42,7 +42,10 @@ CIFAR10_TRAIN_TRANSFORM = timm.data.create_transform(
     re_count=1,
 )
 
+
 def to_hf_transform(transform: Callable, img_key: str = "image") -> Callable:
+    if transform is None:
+        transform = TTv2.ToTensor()
     def _transform(batch):
         return {
             "image": [transform(x) for x in batch[img_key]],
@@ -54,7 +57,7 @@ class HFDataModule(LightningDataModule):
     def __init__(
         self,
         dataset_name: str = "uoft-cs/cifar10",
-        train_transform: Callable = CIFAR10_TRAIN_TRANSFORM,
+        train_transform: Callable = DEFAULT_TEST_TRANSFORM,
         test_transform: Callable = DEFAULT_TEST_TRANSFORM,
         img_key: str = "image",
         batch_size: int = 64,
@@ -159,7 +162,7 @@ class HFDataModule(LightningDataModule):
             batch_size=self.batch_size_per_device,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
-            shuffle=True,
+            shuffle=False,
         )
 
     def val_dataloader(self) -> DataLoader[Any]:

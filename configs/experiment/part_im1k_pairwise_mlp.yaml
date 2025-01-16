@@ -4,7 +4,7 @@
 # python train.py experiment=example
 
 defaults:
-  - override /data: cifar10
+  - override /data: im1k
   - override /model: part_vit_pairwise_mlp
   - override /callbacks: default
   - override /trainer: gpu
@@ -23,13 +23,15 @@ trainer:
   max_epochs: 200
 
 model:
+  optimizer:
+    lr: 0.002
   compile: true
   net:
     backbone:
-      img_size: 32
-      patch_size: 4
+      img_size: 224
+      patch_size: 16
     n_pairs: 4096
 
 data:
-  batch_size: 128
+  batch_size: 64
   num_workers: 8

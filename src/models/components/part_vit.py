@@ -7,14 +7,18 @@ import math
 from typing import Any
 from src.data.components.sampling_utils import sample_and_stitch
 from src.models.components.cross_attention import CrossAttention
+from src.utils.fancy_indexing import index_pairs
+
 
 class PARTViT(nn.Module):
     def __init__(
         self,
         backbone: nn.Module,
-        n_pairs: int,
         embed_dim: int,
         num_patches: int,
+        logit_scale_tanh: bool = False,
+        logit_scale_init: float = 1.0,
+        logit_scale_learnable: bool = False,
         head_type: str = "pairwise_mlp",
         num_targets: int = 2,  # 2: [dx, dy] 4: [dx, dy, dw, dh]
         cross_attention_num_heads: int = None,
@@ -22,67 +26,59 @@ class PARTViT(nn.Module):
     ):
         super().__init__()
         self.backbone = backbone
-        self.n_pairs = n_pairs
         self.head_type = head_type
+        self.logit_scale_learnable = logit_scale_learnable
+        self.logit_scale = nn.Parameter(torch.tensor(float(logit_scale_init)))
+        self.logit_scale_tanh = logit_scale_tanh
+        if not self.logit_scale_learnable:
+            self.logit_scale.requires_grad = False
         if head_type == "pairwise_mlp":
             self.head = nn.Linear(2 * embed_dim, num_targets)
         elif self.head_type == "cross_attention":
             assert cross_attention_num_heads is not None
             assert cross_attention_query_type is not None
-            self.head = CrossAttention(embed_dim=embed_dim,
-                                        num_channels=num_targets,
-                                        num_patches=num_patches,
-                                        num_heads=cross_attention_num_heads,
-                                        query_type=cross_attention_query_type)
+            self.head = CrossAttention(
+                embed_dim=embed_dim,
+                num_channels=num_targets,
+                num_patches=num_patches,
+                num_heads=cross_attention_num_heads,
+                query_type=cross_attention_query_type,
+            )
+        elif self.head_type == "residual_mlp":
+            self.proj = nn.Linear(embed_dim, num_targets)
+            # K: [2, D], P = [D, D], M = [2, D]
+            # K * (P * z1) - K * (P * z2) = K * P * (z1 - z2) = M * (z1 - z2)
         else:
             raise NotImplementedError(f"Head type {head_type} not implemented")
 
     def forward(
-        self, x: Float[Tensor, "b c h w"]
-    ) -> tuple[Float[Tensor, "b n_pairs 2"], Int[Tensor, "b n_pairs 2"]]:
-        z: Float[Tensor, "b n embed_dim"] = self.backbone(x)
+        self,
+        x: Float[Tensor, "B C H W"],
+        patch_pair_indices: Int[Tensor, "B NP 2"],
+    ) -> tuple[Float[Tensor, "B NP 2"], Int[Tensor, "B NP 2"]]:
+        z: Float[Tensor, "B N D"] = self.backbone(x)
         b, n, _ = z.size()
         assert (
             math.isqrt(n) ** 2 == n
         ), f"If the number of patches is not a perfect square, the cls token might be sneaking in. n={n}"
 
-        idx = torch.randint(n, (b, self.n_pairs), device=z.device)
-        jdx = torch.randint(n, (b, self.n_pairs), device=z.device)
-        indices: Int[Tensor, "B n_pairs 2"] = torch.stack([idx, jdx], dim=2)
-
-        z_pairs: Float[Tensor, "b n_pairs 2 embed_dim"] = index_pairs(z, indices)
+        z_pairs: Float[Tensor, "B NP 2 D"] = index_pairs(
+            z, patch_pair_indices
+        )
         if self.head_type == "pairwise_mlp":
-            z: Float[Tensor, "b n_pairs 2"] = self.head(z_pairs.flatten(2, 3))
+            z: Float[Tensor, "B NP 2"] = self.head(z_pairs.flatten(2, 3))
         elif self.head_type == "cross_attention":
-            z: Float[Tensor, "b n_pairs 2"] = self.head(z, indices)
-        return z, indices
+            z: Float[Tensor, "B NP 2"] = self.head(z, patch_pair_indices)
+        elif self.head_type == "residual_mlp":
+            z: Float[Tensor, "B NP 2"] = self.proj( z_pairs[:, :, 1] - z_pairs[:, :, 0])
+        else:
+            raise NotImplementedError(f"Head type {self.head_type} not implemented")
 
 
-def compute_gt_transform(
-    patch_pair_indices: Int[Tensor, "b n_pairs 2"],
-    patch_positions: Int[Tensor, "b n_patches 2"],
-) -> Float[Tensor, "b n_pairs 2"]:
-    true_positions: Float[Tensor, "b n_pairs 2 2"] = index_pairs(
-        patch_positions, patch_pair_indices
-    )
-    true_transform: Float[Tensor, "b n_pairs 2"] = (
-        true_positions[:, :, 0] - true_positions[:, :, 1]
-    )
-    return true_transform.float()
-
-
-def index_pairs(
-    x: Float[Tensor, "b n d"], indices: Int[Tensor, "b k 2"]
-) -> Float[Tensor, "b k 2 d"]:
-    """
-    For each pair indices[b][k][0] and indices[b][k][1],
-    gather the corresponding patches from x and stack them together.
-    """
-    b, n, dim = x.shape
-    _, k, _ = indices.shape
-    batch_offsets = torch.arange(b, device=x.device)[:, None, None] * n
-    flat_indices = torch.flatten(indices + batch_offsets)
-    return x.flatten(0, 1)[flat_indices].view(b, k, 2, dim)
+        if self.logit_scale_tanh:
+            z = z.tanh()
+        z = z * self.logit_scale
+        return z
 
 
 if __name__ == "__main__":
@@ -96,7 +92,6 @@ if __name__ == "__main__":
     )
     model = PARTViT(
         backbone=backbone,
-        n_pairs=4,
         embed_dim=backbone.embed_dim,
         num_patches=backbone.patch_embed.num_patches,
         head_type="cross_attention",
@@ -104,10 +99,14 @@ if __name__ == "__main__":
         cross_attention_num_heads=4,
         cross_attention_query_type="positional",
     )
-    x = torch.randn(2, 3, 64, 64)
+    x = torch.randn(1, 3, 64, 64)
     x, patch_positions = sample_and_stitch(x, 16, "offgrid")
-    y_pred, patch_pair_indices = model(x) 
-    y_gt = compute_gt_transform(patch_pair_indices, patch_positions)
-    mse = nn.MSELoss()(y_pred, y_gt)
-    print(mse)
+    y_pred, patch_pair_indices = model(x)
+    # y_gt = compute_gt_transform(patch_pair_indices, patch_positions)
 
+    # plot reconstructed image given the predicted patch pair indices
+
+    # mse = nn.L1Loss()(y_pred, y_gt)
+    # print(mse)
+    # print(y_pred)
+    # print(y_gt)

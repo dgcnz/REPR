@@ -166,3 +166,5 @@ data
 .vscode
 logs
 requirements.txt
+artifacts
+.aim
