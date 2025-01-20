@@ -5,7 +5,7 @@
 
 defaults:
   - override /data: im1k
-  - override /model: part_vit_residual_mlp
+  - override /model: part_vit_pairdiff_mlp
   - override /callbacks: default
   - override /trainer: gpu
   - override /logger: tensorboard

@@ -30,6 +30,7 @@ tensorboardx = "^2.6.2.2"
 tensorboard = "^2.18.0"
 colorstamps = "^0.1.3"
 aim = "^3.27.0"
+plotly = "^5.24.1"
 
 [[tool.poetry.source]]
 name = "torch-cu124"
@@ -51,6 +52,9 @@ flake8 = "^7.1.1"
 pytest = "^8.3.3"
 pytest-benchmark = {git = "https://github.com/ionelmc/pytest-benchmark.git"}
 tabulate = "^0.9.0"
+jupyter = "^1.1.1"
+dash = "^2.18.2"
+pandas = "^2.2.3"
 
 [build-system]
 requires = ["poetry-core"]

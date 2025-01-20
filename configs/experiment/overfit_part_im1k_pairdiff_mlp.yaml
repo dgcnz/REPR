@@ -6,10 +6,10 @@
 defaults:
   - /debug/overfit
   - override /data: im1k
-  - override /model: part_vit_residual_mlp
+  - override /model: part_vit_pairdiff_mlp
   - override /callbacks: training
   - override /trainer: gpu
-  - override /logger: aim
+  - override /logger: wandb
 
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
@@ -34,6 +34,12 @@ model:
       img_size: 224
       patch_size: 32
   sample_mode: ???
+
+  optimizer:
+    lr: 4e-4
+  scheduler:
+    warmup_t: 150
+
 
 data:
   batch_size: 2

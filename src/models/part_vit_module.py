@@ -41,6 +41,21 @@ class PARTMAELossWeighted(torch.nn.Module):
         return (x.sum(2) / (gt_T.abs().sum(2) + 1e-6)).mean()
 
 
+class PARTLoss(torch.nn.Module):
+    def __init__(self, img_size: tuple[int, int], f: Callable | None = None):
+        super().__init__()
+        self.f = f
+        self.img_size = img_size
+        self.max_T = max(img_size)
+        self.min_T = -self.max_T
+
+    def forward(self, pred_T: Tensor, gt_T: Tensor):
+        pred_T = (pred_T - self.min_T) / (self.max_T - self.min_T)
+        gt_T = (gt_T - self.min_T) / (self.max_T - self.min_T)
+        loss = self.f(torch.abs(pred_T - gt_T)).sum()
+        return loss
+
+
 def compute_symmetry_loss(
     patch_pair_indices: Int[Tensor, "B n_pairs 2"],
     transforms: Float[Tensor, "B n_pairs 2"],
@@ -75,12 +90,13 @@ class PARTViTModule(LightningModule):
         net: torch.nn.Module,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler,
-        compile: bool,
         patch_size: int,
+        criterion_fn: Callable,
         sample_mode: str = "offgrid",
         symmetry_penalty: float = 0.0,
         pair_sampler: Callable[[int, int, str], Int[Tensor, "B NP 2"]] = get_all_pairs,
-        criterion_fn: Callable = torch.nn.MSELoss,
+        compile: bool = False,
+        debug_head_activations: bool = False,
     ) -> None:
         """Initialize a `MNISTLitModule`.
 
@@ -110,9 +126,23 @@ class PARTViTModule(LightningModule):
         self.test_loss = MeanMetric()
 
         # for tracking best so far validation accuracy
-        self.val_mse_best = MinMetric()
+        self.val_rmse_best = MinMetric()
         self.cli_logger = pylogger.RankedLogger(__name__, rank_zero_only=True)
         self.pair_sampler = pair_sampler
+
+        self.debug_head_activations = debug_head_activations
+        if self.debug_head_activations and self.head_type == "pairdiff_mlp":
+            self.cache = {
+                "net.head.in": None,
+                "net.head.out": None,
+                "net.head.weight": None,
+            }
+            self.net.head.register_forward_hook(self.pairdiff_mlp_hook)
+
+    def pairdiff_mlp_hook(self, module, input, output):
+        self.cache["net.head.in"] = input
+        self.cache["net.head.out"] = output
+        self.cache["net.head.weight"] = module.weight
 
     def forward(
         self, x: torch.Tensor, patch_pair_indices: torch.Tensor
@@ -130,25 +160,19 @@ class PARTViTModule(LightningModule):
         # so it's worth to make sure validation metrics don't store results from these checks
         self.val_loss.reset()
         self.val_rmse.reset()
-        self.val_mse_best.reset()
+        self.val_rmse_best.reset()
         if self.hparams.compile and self.trainer.accelerator == "cpu":
             self.cli_logger.warning(
                 "Model compilation is enabled but the trainer is not using GPU. "
             )
 
-    def norm_T(self, T: Tensor, img_size: tuple[int, int]) -> Tensor:
-        # normalize to [0, 1]
-        max_T = max(img_size)
-        min_T = -max_T
-        T = (T - min_T) / (max_T - min_T)
-        return T
+    def norm_T(self, T: Tensor) -> Tensor:
+        # normalize to [-1, 1]
+        return T / self.net.logit_scale
 
-    def unnorm_T(self, T: Tensor, img_size: tuple[int, int]) -> Tensor:
-        # unnormalize to [0, 1]
-        max_T = max(img_size)
-        min_T = -max_T
-        T = T * (max_T - min_T) + min_T
-        return T
+    def unnorm_T(self, T: Tensor) -> Tensor:
+        # unnormalize to [-img_size, img_size]
+        return T * self.net.logit_scale
 
     def model_step(
         self, batch: tuple[Tensor, Tensor] | dict[str, Tensor]
@@ -173,22 +197,21 @@ class PARTViTModule(LightningModule):
         gt_T = compute_gt_transform(patch_pair_indices, patch_positions)
 
         # normalize transformations to [-1, 1] to improve training stability
-        pred_T = self.norm_T(pred_T, img_size=(x.shape[-2], x.shape[-1]))
-        gt_T = self.norm_T(gt_T, img_size=(x.shape[-2], x.shape[-1]))
+        pred_T = self.norm_T(pred_T)
+        gt_T = self.norm_T(gt_T)
 
-        loss = mse = self.criterion(pred_T, gt_T)
+        loss = self.criterion(pred_T, gt_T)  # 1d tensor
         symmetry_loss = None
         if self.hparams.symmetry_penalty > 0:
             symmetry_loss = compute_symmetry_loss(patch_pair_indices, pred_T, n_patches)
             symmetry_loss = symmetry_loss * self.hparams.symmetry_penalty
             loss += symmetry_loss
 
-        pred_T = self.unnorm_T(pred_T, img_size=(x.shape[-2], x.shape[-1]))
-        gt_T = self.unnorm_T(gt_T, img_size=(x.shape[-2], x.shape[-1]))
+        pred_T = self.unnorm_T(pred_T)
+        gt_T = self.unnorm_T(gt_T)
 
         return {
             "loss": loss,
-            "mse": mse,
             "symmetry_loss": symmetry_loss,
             "pred_T": pred_T,
             "gt_T": gt_T,
@@ -213,17 +236,24 @@ class PARTViTModule(LightningModule):
 
         # update and log metrics
         self.train_loss(loss)
-        self.train_rmse(preds.flatten(0,1), targets.flatten(0,1))
+        # log learning rate
+        self.train_rmse(preds.flatten(0, 1), targets.flatten(0, 1))
         self.log(
             "train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True
         )
+        rmse_y, rmse_x = self.train_rmse.compute()
+        rmse = (rmse_y + rmse_x) / 2
         self.log_dict(
-            dict(zip(["train/rmse_y", "train/rmse_x"], self.train_rmse.compute())),
+            {
+                "train/rmse_y": rmse_y,
+                "train/rmse_x": rmse_x,
+                "train/rmse": rmse,
+            },
             on_step=False,
             on_epoch=True,
             prog_bar=True,
         )
-        if hasattr(self.net, "logit_scale"):
+        if hasattr(self.net, "logit_scale") and self.net.logit_scale_learnable:
             self.log(
                 "train/logit_scale", self.net.logit_scale, on_step=False, on_epoch=True
             )
@@ -324,7 +354,7 @@ class PARTViTModule(LightningModule):
         if isinstance(self.logger, TensorBoardLogger):
             self.logger.experiment.add_figure(name, fig, global_step=self.current_epoch)
         elif isinstance(self.logger, WandbLogger):
-            wandb.log({name: fig})
+            wandb.log({name: wandb.Image(fig)})
         elif self.logger.__class__.__name__ == "AimLogger":
             from aim import Image
             from aim.pytorch_lightning import AimLogger
@@ -448,10 +478,16 @@ class PARTViTModule(LightningModule):
 
         # update and log metrics
         self.val_loss(loss)
-        self.val_rmse(preds.flatten(0,1), targets.flatten(0,1))
+        self.val_rmse(preds.flatten(0, 1), targets.flatten(0, 1))
         self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
+        rmse_y, rmse_x = self.val_rmse.compute()
+        rmse = (rmse_y + rmse_x) / 2
         self.log_dict(
-            dict(zip(["val/rmse_y", "val/rmse_x"], self.val_rmse.compute())),
+            {
+                "val/rmse_y": rmse_y,
+                "val/rmse_x": rmse_x,
+                "val/rmse": rmse,
+            },
             on_step=False,
             on_epoch=True,
             prog_bar=True,
@@ -547,11 +583,11 @@ class PARTViTModule(LightningModule):
     def on_validation_epoch_end(self) -> None:
         "Lightning hook that is called when a validation epoch ends."
         mse = self.val_rmse.compute()  # get current val mse
-        self.val_mse_best(mse)  # update best so far val acc
+        self.val_rmse_best(mse)  # update best so far val acc
         # log `val_acc_best` as a value through `.compute()` method, instead of as a metric object
         # otherwise metric would be reset by lightning after each epoch
         self.log(
-            "val/rmse_best", self.val_mse_best.compute(), sync_dist=True, prog_bar=True
+            "val/rmse_best", self.val_rmse_best.compute(), sync_dist=True, prog_bar=True
         )
 
     def test_step(
@@ -568,12 +604,18 @@ class PARTViTModule(LightningModule):
 
         # update and log metrics
         self.test_loss(loss)
-        self.test_rmse(preds.flatten(0,1), targets.flatten(0,1))
+        self.test_rmse(preds.flatten(0, 1), targets.flatten(0, 1))
         self.log(
             "test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True
         )
+        rmse_y, rmse_x = self.test_rmse.compute()
+        rmse = (rmse_y + rmse_x) / 2
         self.log_dict(
-            dict(zip(["test/rmse_y", "test/rmse_x"], self.test_rmse.compute())),
+            {
+                "test/rmse_y": rmse_y,
+                "test/rmse_x": rmse_x,
+                "test/rmse": rmse,
+            },
             on_step=False,
             on_epoch=True,
             prog_bar=True,

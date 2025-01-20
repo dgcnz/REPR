@@ -20,7 +20,7 @@ net:
     patch_size: 16
   embed_dim: ${model.net.backbone.embed_dim}
   num_patches: ${eval:'(${model.net.backbone.img_size} // ${model.net.backbone.patch_size})**2'}
-  head_type: "residual_mlp"
+  head_type: "pairdiff_mlp"
   logit_scale_init: ${model.net.backbone.img_size}
   logit_scale_tanh: True
 

@@ -10,6 +10,23 @@ from src.models.components.cross_attention import CrossAttention
 from src.utils.fancy_indexing import index_pairs
 
 
+class ResidualMLP(nn.Module):
+    def __init__(self, embed_dim: int, num_targets: int):
+        super().__init__()
+        self.proj = nn.Linear(embed_dim, num_targets, bias=False)
+        # input_var = 5.0  # input values are normally distributed with mean 0 and visible range [-5, 5]
+        # std = 1.0 / (input_var * math.sqrt(embed_dim))
+        # self.proj.weight.data.normal_(0, std)
+        # K: [2, D], P = [D, D], M = [2, D]
+        # K * (P * z1) - K * (P * z2) = K * P * (z1 - z2) = M * (z1 - z2)
+
+        std = 1.0 / (5.0 * math.sqrt(embed_dim)) # 5.0 is the input range
+        self.proj.weight.data.normal_(0, std)
+
+    def forward(self, z: Float[Tensor, "B NP 2 D"]) -> Float[Tensor, "B NP 2"]:
+        return self.proj(z[:, :, 1] - z[:, :, 0])
+
+
 class PARTViT(nn.Module):
     def __init__(
         self,
@@ -44,10 +61,9 @@ class PARTViT(nn.Module):
                 num_heads=cross_attention_num_heads,
                 query_type=cross_attention_query_type,
             )
-        elif self.head_type == "residual_mlp":
-            self.proj = nn.Linear(embed_dim, num_targets)
-            # K: [2, D], P = [D, D], M = [2, D]
-            # K * (P * z1) - K * (P * z2) = K * P * (z1 - z2) = M * (z1 - z2)
+        elif self.head_type == "pairdiff_mlp":
+            self.head = ResidualMLP(embed_dim, num_targets)
+
         else:
             raise NotImplementedError(f"Head type {head_type} not implemented")
 
@@ -62,18 +78,15 @@ class PARTViT(nn.Module):
             math.isqrt(n) ** 2 == n
         ), f"If the number of patches is not a perfect square, the cls token might be sneaking in. n={n}"
 
-        z_pairs: Float[Tensor, "B NP 2 D"] = index_pairs(
-            z, patch_pair_indices
-        )
+        z_pairs: Float[Tensor, "B NP 2 D"] = index_pairs(z, patch_pair_indices)
         if self.head_type == "pairwise_mlp":
             z: Float[Tensor, "B NP 2"] = self.head(z_pairs.flatten(2, 3))
         elif self.head_type == "cross_attention":
             z: Float[Tensor, "B NP 2"] = self.head(z, patch_pair_indices)
-        elif self.head_type == "residual_mlp":
-            z: Float[Tensor, "B NP 2"] = self.proj( z_pairs[:, :, 1] - z_pairs[:, :, 0])
+        elif self.head_type == "pairdiff_mlp":
+            z: Float[Tensor, "B NP 2"] = self.head(z_pairs)
         else:
             raise NotImplementedError(f"Head type {self.head_type} not implemented")
-
 
         if self.logit_scale_tanh:
             z = z.tanh()
