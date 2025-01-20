@@ -4,7 +4,6 @@
 # python train.py experiment=example
 
 defaults:
-  - /debug/overfit
   - override /data: im1k
   - override /model: part_vit_pairdiff_mlp
   - override /callbacks: training
@@ -20,11 +19,11 @@ seed: 12345
 float32_matmul_precision: "high"
 
 trainer:
-  min_epochs: 400
-  max_epochs: 1000
-  limit_val_batches: 0
-  limit_test_batches: 0
-  check_val_every_n_epoch: 50
+  min_epochs: 1
+  max_epochs: 5
+  limit_train_batches: 512
+  limit_val_batches: 512
+  check_val_every_n_epoch: 1
   deterministic: true
 
 model:
@@ -32,7 +31,7 @@ model:
   net:
     backbone:
       img_size: 224
-      patch_size: 32
+      patch_size: 16
   sample_mode: ???
 
   optimizer:
@@ -42,5 +41,10 @@ model:
 
 
 data:
-  batch_size: 2
-  num_workers: 0
+  batch_size: 32
+  num_workers: 8
+
+
+logger:
+  wandb:
+    group: ???

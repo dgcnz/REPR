@@ -4,6 +4,7 @@ defaults:
   - /scheduler: deit_cosine_sched
   - /optimizer: deit_adamw
   - criterion_fn: mse
+  - pair_sampler: all
 
 net:
   _target_: src.models.components.part_vit.PARTViT
@@ -27,8 +28,8 @@ net:
 symmetry_penalty: 0.005
 patch_size: ${model.net.backbone.patch_size}
 sample_mode: "offgrid"
-pair_sampler:
-  _target_: src.models.components.part_utils.get_all_pairs
-  _partial_: true
+# pair_sampler:
+#   _target_: src.models.components.part_utils.get_all_pairs
+#   _partial_: true
 # compile model for faster training with pytorch 2.0
 compile: false
