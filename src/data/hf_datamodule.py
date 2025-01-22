@@ -64,6 +64,7 @@ class HFDataModule(LightningDataModule):
         num_workers: int = 0,
         pin_memory: bool = False,
         val_fraction: float = None,
+        cache_dir: str | None = None,
     ) -> None:
         """Initialize a `HFDataModule`.
 
@@ -105,7 +106,7 @@ class HFDataModule(LightningDataModule):
                 "huggingface-cli download ILSVRC/imagenet-1k --repo-type dataset"
             )
 
-        _ = load_dataset(self.hparams.dataset_name)
+        _ = load_dataset(self.hparams.dataset_name, cache_dir=self.hparams.cache_dir)
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Load data. Set variables: `self.data_train`, `self.data_val`, `self.data_test`.
@@ -129,7 +130,7 @@ class HFDataModule(LightningDataModule):
 
         # load and split datasets only if not loaded already
         if not self.data_train and not self.data_val and not self.data_test:
-            ds = load_dataset(self.dataset_name).with_format("torch")
+            ds = load_dataset(self.dataset_name, cache_dir=self.hparams.cache_dir).with_format("torch")
             self.data_test = ds["test"]
             if "validation" in ds:
                 self.data_train = ds["train"]
