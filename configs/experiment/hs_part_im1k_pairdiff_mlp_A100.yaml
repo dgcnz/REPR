@@ -7,7 +7,7 @@ defaults:
   - override /data: im1k
   - override /model: part_vit_pairdiff_mlp
   - override /callbacks: training
-  - override /trainer: gpu
+  - override /trainer: ddp
   - override /logger: wandb
 
 # all parameters below will be merged with parameters from default configurations set above
@@ -25,6 +25,7 @@ trainer:
   limit_val_batches: 256
   check_val_every_n_epoch: 1
   deterministic: true
+  devices: 4
 
 callbacks:
   head_hook:
@@ -47,8 +48,8 @@ model:
 
 
 data:
-  batch_size: 256
-  num_workers: 8
+  batch_size: 1024
+  num_workers: 14
   cache_dir: /scratch-shared/dcanez/HF_HOME
 
 
