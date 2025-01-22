@@ -14,9 +14,7 @@ module load CUDA/12.6.0
 cd $HOME/development/PART
 source .venv/bin/activate
 
-python tools/train_net.py \
-    --config-file ../projects/dino_dinov2/configs/COCO/dino_dinov2_b_12ep.py \
-    --num-gpus 4 
+╰─❯ python -m src.train hparams_search=im1k_A100 experiment=hs_part_im1k_pairdiff_mlp_A100
 
 deactivate
 module unload CUDA/12.6.0
