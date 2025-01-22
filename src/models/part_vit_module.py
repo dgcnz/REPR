@@ -97,6 +97,7 @@ class PARTViTModule(LightningModule):
         pair_sampler: Callable[[int, int, str], Int[Tensor, "B NP 2"]] = get_all_pairs,
         compile: bool = False,
         debug_head_activations: bool = False,
+        scheduler_interval: str = "step", # previously "epoch"
     ) -> None:
         """Initialize a `MNISTLitModule`.
 
@@ -664,7 +665,7 @@ class PARTViTModule(LightningModule):
                 "lr_scheduler": {
                     "scheduler": scheduler,
                     "monitor": "val/loss",
-                    "interval": "epoch",
+                    "interval": self.hparams.scheduler_interval,
                     "frequency": 1,
                 },
             }

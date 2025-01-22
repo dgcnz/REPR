@@ -3,7 +3,7 @@ _target_: src.models.part_vit_module.PARTViTModule
 defaults:
   - /scheduler: deit_cosine_sched
   - /optimizer: deit_adamw
-  - criterion_fn: mse
+  - criterion_fn: l1
   - pair_sampler: all
 
 net:

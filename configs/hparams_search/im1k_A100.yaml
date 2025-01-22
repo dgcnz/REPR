@@ -8,7 +8,7 @@ defaults:
 
 # choose metric which will be optimized by Optuna
 # make sure this is the correct name of some metric logged in lightning module!
-optimized_metric: "train/rmse"
+optimized_metric: "val/rmse"
 
 # here we define Optuna hyperparameter search
 # it optimizes for value returned from function with @hydra.main decorator
@@ -27,13 +27,13 @@ hydra:
     study_name: overfit_im1k
 
     # number of parallel workers
-    n_jobs: 1
+    n_jobs: 4
 
     # 'minimize' or 'maximize' the objective
     direction: minimize
 
     # total number of runs that will be executed
-    n_trials: 20
+    n_trials: 24
 
     # choose Optuna hyperparameter sampler
     # you can choose bayesian sampler (tpe), random search (without optimization), grid sampler, and others
@@ -41,9 +41,10 @@ hydra:
     sampler:
       _target_: optuna.samplers.TPESampler
       seed: 12345
-      n_startup_trials: 5 # number of random sampling runs before optimization starts
+      n_startup_trials: 4 # number of random sampling runs before optimization starts
 
     # define hyperparameter search space
     params:
-      model.optimizer.lr: interval(0.00001, 0.0005)
-      model.scheduler.warmup_t: int(interval(5, 10))
+      model.optimizer.lr: interval(0.00001, 0.001)
+      # hsearch for 5 epochs, to 10 epochs, which is 1280 to 2560 steps
+      model.scheduler.warmup_t: int(interval(1280, 2560))
