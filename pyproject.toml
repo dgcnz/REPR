@@ -10,8 +10,8 @@ packages = [
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.14"
-torch = {version = "2.6.0.dev20241106+cu124", allow-prereleases = true, source = "torch-cu124", platform = "linux"}
-torchvision = {version = "0.20.0.dev20241106+cu124", allow-prereleases = true, source = "torch-cu124", platform = "linux"}
+torch = {version = "2.7.0.dev20250122+cu126", allow-prereleases = true, source = "torch-cu126", platform = "linux"}
+torchvision = {version = "0.22.0.dev20250122+cu126", allow-prereleases = true, source = "torch-cu126", platform = "linux"}
 timm = "^1.0.11"
 wandb = "^0.18.6"
 matplotlib = "^3.9.2"
@@ -33,8 +33,8 @@ aim = "^3.27.0"
 plotly = "^5.24.1"
 
 [[tool.poetry.source]]
-name = "torch-cu124"
-url = "https://download.pytorch.org/whl/nightly/cu124"
+name = "torch-cu126"
+url = "https://download.pytorch.org/whl/nightly/cu126"
 priority = "explicit"
 
 
