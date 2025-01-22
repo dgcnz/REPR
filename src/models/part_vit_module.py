@@ -279,7 +279,7 @@ class PARTViTModule(LightningModule):
                 stage="train",
             )
 
-        return loss
+        return output
 
     def _to_cpu(self, tensor: torch.Tensor):
         # if half precision, convert to float

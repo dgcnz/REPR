@@ -1,3 +1,5 @@
 defaults:
   - ema
   - lr_monitor
+  - head_hook
+

@@ -11,13 +11,16 @@ from src.utils.fancy_indexing import index_pairs
 
 
 class PairDiffMLP(nn.Module):
-    def __init__(self, embed_dim: int, num_targets: int):
+    def __init__(self, embed_dim: int, num_targets: int, kaiming_init_a: float = 4.5):
         super().__init__()
         self.proj = nn.Linear(embed_dim, num_targets, bias=False)
-        std = 1.0 / (5.0 * math.sqrt(embed_dim)) # [-5, 5] is z's range
-        self.proj.weight.data.normal_(0, std)
+        # std = 1.0 / (5.0 * math.sqrt(embed_dim)) # [-5, 5] is z's range
+        # self.proj.weight.data.normal_(0, std)
+        
+        # by default linear's init is a=sqrt(5)
+        torch.nn.init.kaiming_uniform_(self.proj.weight, a=kaiming_init_a)
 
-    def forward(self, z: Float[Tensor, "B NP 2 D"], patch_pair_indices: Int[Tensor, "B NP 2"]) -> Float[Tensor, "B NP 2"]:
+    def forward(self, z: Float[Tensor, "B N D"], patch_pair_indices: Int[Tensor, "B NP 2"]) -> Float[Tensor, "B NP 2"]:
         # option 1
         # P * (z1 - z2) = P * z1 - P * z2
         # z_pairs = index_pairs(z, patch_pair_indices)
@@ -27,9 +30,18 @@ class PairDiffMLP(nn.Module):
         # P * Z = Z'
         # out = z_i' - z_j'
 
-        z_p = self.proj(z)
-        z_p_pairs = index_pairs(z_p, patch_pair_indices)
+        z_p: Float[Tensor, "B N 2"] = self.proj(z)
+        z_p_pairs: Float[Tensor, "B NP 2 2"] = index_pairs(z_p, patch_pair_indices)
         return z_p_pairs[: , :, 1] - z_p_pairs[:, :, 0]
+    
+class PairwiseMLP(nn.Module):
+    def __init__(self, embed_dim: int, num_targets: int):
+        super().__init__()
+        self.linear = nn.Linear(2 * embed_dim, num_targets)
+    
+    def forward(self, z: Float[Tensor, "B NP 2 D"], patch_pair_indices: Int[Tensor, "B NP 2"]) -> Float[Tensor, "B NP 2"]:
+        z_pairs = index_pairs(z, patch_pair_indices)
+        return self.linear(z_pairs.flatten(2, 3))
 
 
 class PARTViT(nn.Module):
@@ -49,13 +61,14 @@ class PARTViT(nn.Module):
         super().__init__()
         self.backbone = backbone
         self.head_type = head_type
+        self.embed_dim = embed_dim
         self.logit_scale_learnable = logit_scale_learnable
         self.logit_scale = nn.Parameter(torch.tensor(float(logit_scale_init)))
         self.logit_scale_tanh = logit_scale_tanh
         if not self.logit_scale_learnable:
             self.logit_scale.requires_grad = False
         if head_type == "pairwise_mlp":
-            self.head = nn.Linear(2 * embed_dim, num_targets)
+            self.head = PairwiseMLP(embed_dim, num_targets)
         elif self.head_type == "cross_attention":
             assert cross_attention_num_heads is not None
             assert cross_attention_query_type is not None
@@ -84,8 +97,7 @@ class PARTViT(nn.Module):
         ), f"If the number of patches is not a perfect square, the cls token might be sneaking in. n={n}"
 
         if self.head_type == "pairwise_mlp":
-            z_pairs: Float[Tensor, "B NP 2 D"] = index_pairs(z, patch_pair_indices)
-            z: Float[Tensor, "B NP 2"] = self.head(z_pairs.flatten(2, 3))
+            z: Float[Tensor, "B NP 2"] = self.head(z, patch_pair_indices)
         elif self.head_type == "cross_attention":
             z: Float[Tensor, "B NP 2"] = self.head(z, patch_pair_indices)
         elif self.head_type == "pairdiff_mlp":

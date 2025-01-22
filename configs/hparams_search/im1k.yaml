@@ -45,5 +45,5 @@ hydra:
 
     # define hyperparameter search space
     params:
-      model.optimizer.lr: interval(0.0001, 0.005)
-      model.scheduler.warmup_t: int(interval(100, 250))
+      model.optimizer.lr: interval(0.00001, 0.0005)
+      model.scheduler.warmup_t: int(interval(5, ))
