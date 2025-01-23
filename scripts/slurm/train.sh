@@ -18,7 +18,7 @@ source .venv/bin/activate
 export NCCL_DEBUG=INFO
 export PYTHONFAULTHANDLER=1
 
-srun python -m src.train hparams_search=im1k_A100 experiment=hs_part_im1k_pairdiff_mlp_A100 trainer.num_nodes=1 data.batch_size=256 model.compile=False
+srun python -m src.train experiment=hs_part_im1k_pairdiff_mlp_A100 trainer.num_nodes=1 data.batch_size=256 model.compile=False
 
 deactivate
 module unload CUDA/12.6.0
