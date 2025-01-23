@@ -3,6 +3,7 @@
 #SBATCH --partition=gpu_a100
 #SBATCH --nodes=1             
 #SBATCH --ntasks-per-node=4   
+#SBATCH --gpus-per-node=4
 #SBATCH --time=01:00:00
 #SBATCH --job-name=train
 #SBATCH --output=scripts/slurm_logs/slurm_output_%A.out
