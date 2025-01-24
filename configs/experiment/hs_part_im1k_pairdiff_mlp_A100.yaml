@@ -27,9 +27,6 @@ trainer:
   deterministic: true
   devices: 4
 
-callbacks:
-  head_hook:
-    every_n_steps: 256
 
 model:
   compile: true

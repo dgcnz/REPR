@@ -1,0 +1,4 @@
+# @package callbacks
+head_hook_logger:
+  _target_: src.callbacks.HeadHookLogger
+  every_n_steps: -1

@@ -173,30 +173,6 @@ def nx_compute_connected_components(g: nx.MultiDiGraph):
     return components
 
 
-def reconstruct_image_from_sampling(
-    patch_positions: Int[Tensor, "n_patches 2"],
-    patch_size: int,
-    img: Float[Tensor, "3 H W"],
-):
-    """
-    Reconstruct the image using the predicted transformations.
-    """
-    n_patches, _ = patch_positions.size()
-    assert tuple(patch_positions.shape) == (n_patches, 2)
-    assert img.size(0) == 3
-    assert img.dim() == 3
-
-    new_img = torch.zeros_like(img)
-    _, H, W = img.shape
-    for node in range(n_patches):
-        y, x = patch_positions[node]
-        new_img[:, y : y + patch_size, x : x + patch_size] = img[
-            :, y : y + patch_size, x : x + patch_size
-        ]
-
-    return new_img
-
-
 import matplotlib.pyplot as plt
 
 
@@ -266,25 +242,18 @@ def reconstruct_image(
     return new_img
 
 
-def create_image_from_transforms(
-    ref_transforms: dict[int, Tensor],
-    patch_positions: Int[Tensor, "n_patches 2"],
-    patch_size: int,
-    img: Float[Tensor, "3 H W"],
-    refpatch_id: int,
+def get_transforms_from_reference_patch_batch(
+    refpatch_ids: list[int],
+    transforms: Float[Tensor, "B n_pairs 2"],
+    pair_indices: Int[Tensor, "B n_pairs 2"],
+    patch_positions: Int[Tensor, "B n_patches 2"],
 ):
-    new_img = torch.zeros_like(img)
-    _, H, W = img.shape
-    for node, t in ref_transforms.items():
-        y, x = patch_positions[node]
-        # TODO: use some interpolation here?
-        t_rounded = t.round().to(torch.int64)
-        new_y, new_x = patch_positions[refpatch_id] + t_rounded
-        if 0 <= new_y <= H - patch_size and 0 <= new_x <= W - patch_size:
-            new_img[:, new_y : new_y + patch_size, new_x : new_x + patch_size] = img[
-                :, y : y + patch_size, x : x + patch_size
-            ]
-    return new_img
+    return [
+        get_transforms_from_reference_patch(
+            refpatch_ids[i], transforms[i], pair_indices[i], patch_positions[i]
+        )
+        for i in range(len(refpatch_ids))
+    ]
 
 
 def get_transforms_from_reference_patch(
@@ -303,10 +272,16 @@ def get_transforms_from_reference_patch(
     g = compute_reconstruction_graph(pair_indices, patch_positions)
     g = nx.minimum_spanning_tree(g, weight="gt_l1")
     ref_transforms = {refpatch_id: torch.zeros(2)}
-    pair_transforms = {(u, v):  T for (u, v), T in zip(pair_indices.tolist(), transforms)}
+    pair_transforms = {
+        (u, v): T for (u, v), T in zip(pair_indices.tolist(), transforms)
+    }
 
     for u, v in nx.dfs_edges(g, source=refpatch_id):
-        T_uv = pair_transforms[(u, v)] if (u, v) in pair_transforms else -pair_transforms[(v, u)]
+        T_uv = (
+            pair_transforms[(u, v)]
+            if (u, v) in pair_transforms
+            else -pair_transforms[(v, u)]
+        )
         if u == refpatch_id:
             ref_transforms[v] = T_uv
         else:
@@ -378,6 +353,125 @@ def create_provenance_grid(
     return output_abs, output_rel
 
 
+def plot_provenances(
+    refpatch_id: int,
+    ref_transforms: dict[str, Tensor],
+    patch_positions: Int[Tensor, "n_patches 2"],
+    img_shape: tuple[int, int],
+    patch_size: int,
+):
+    provenance_abs, provenance_rel = create_provenance_grid(
+        patch_positions, refpatch_id, ref_transforms, patch_size, img_shape
+    )
+    fig_y_x, ax_y_x = plt.subplots(1, 2, figsize=(10, 5))
+    # plot x and y separately of abs
+    ax_y_x[0].imshow(provenance_abs[:, :, 0])
+    ax_y_x[0].set_title("y")
+    ax_y_x[1].imshow(provenance_abs[:, :, 1])
+    ax_y_x[1].set_title("x")
+    fig_abs_rel, ax_abs_rel = plt.subplots(1, 2, figsize=(10, 5))
+    plot_provenance(ax_abs_rel[0], provenance_rel, abs=True)  # Abs
+    plot_provenance(ax_abs_rel[1], provenance_rel, abs=False)  # Rel
+    return fig_y_x, fig_abs_rel
+
+
+def plot_provenances_batch(
+    refpatch_ids: list[int],
+    ref_transforms: list[dict[int, Tensor]],
+    patch_positions: Int[Tensor, "B n_patches 2"],
+    img_shape: tuple[int, int],
+    patch_size: int,
+):
+    B = len(refpatch_ids)
+    fig, axes = plt.subplots(B, 4, figsize=(10, 5 * B), squeeze=False)
+    for i, ax in enumerate(axes):
+        provenance_abs, provenance_rel = create_provenance_grid(
+            patch_positions[i],
+            refpatch_ids[i],
+            ref_transforms[i],
+            patch_size,
+            img_shape,
+        )
+        ax[0].imshow(provenance_abs[:, :, 0])
+        ax[0].set_title("y")
+        ax[1].imshow(provenance_abs[:, :, 1])
+        ax[1].set_title("x")
+        plot_provenance(ax[2], provenance_rel, abs=True)
+        plot_provenance(ax[3], provenance_rel, abs=False)
+    return fig
+
+#     def _log_plot(
+#         self,
+#         fig: plt.Figure,
+#         name: str,
+#     ):
+#         if isinstance(self.logger, TensorBoardLogger):
+#             self.logger.experiment.add_figure(name, fig, global_step=self.current_epoch)
+#         elif isinstance(self.logger, WandbLogger):
+#             wandb.log({name: wandb.Image(fig)})
+#         elif self.logger.__class__.__name__ == "AimLogger":
+#             from aim import Image
+#             from aim.pytorch_lightning import AimLogger
+# 
+#             self.logger: AimLogger
+#             img = Image(fig)
+#             self.logger.experiment.track(
+#                 img,
+#                 name=name,
+#                 step=self.trainer.global_step,
+#                 epoch=self.trainer.current_epoch,
+#             )
+#         else:
+#             self.cli_logger.warning(
+#                 f"{type(self.logger)} is unable to log the {name} image. "
+#             )
+#         plt.close(fig)
+
+#     def _log_patch_pair_indices_plot(
+#         self, patch_pair_indices, num_patches: int, stage: str
+#     ):
+#         fig, ax = plt.subplots(1, 1)
+#         plot_patch_pair_coverage(ax, patch_pair_indices, num_patches)
+#         self._log_plot(fig, f"{stage}/patch_pair_indices")
+
+
+# def _plot_refpatch_coverage(
+#     self,
+#     refpatch_id,
+#     patch_positions,
+#     H,
+#     W,
+#     patch_size,
+#     ref_transforms: dict,
+#     stage: str,
+# ):
+#     """
+#     Image where 1 if patch is connected to root, 0 otherwise.
+#     """
+#     n_patches = (H // patch_size) * (W // patch_size)
+#     occupancy = torch.zeros(H, W)
+#     for patch_idx in ref_transforms.keys():
+#         y = patch_positions[patch_idx, 0]
+#         x = patch_positions[patch_idx, 1]
+#         occupancy[y : y + patch_size, x : x + patch_size] = 1
+# 
+#     n_coverage = len(set(ref_transforms.keys()))
+#     fig, ax = plt.subplots(1, 1)
+#     ax.imshow(occupancy, cmap="binary")
+#     ax.set_title(f"Coverage of {refpatch_id}: {n_coverage}/{n_patches}")
+#     # add legend
+#     legend_elements = [
+#         plt.Rectangle(
+#             (0, 0), 1, 1, facecolor="black", edgecolor="black", label="Disconnected"
+#         ),
+#         plt.Rectangle(
+#             (0, 0), 1, 1, facecolor="white", edgecolor="black", label="Connected"
+#         ),
+#     ]
+#     ax.legend(handles=legend_elements)
+#     self._log_plot(fig, f"{stage}/root_coverage")
+
+
 def plot_provenance(
     ax,
     provenance: Float[Tensor, "H W 2"],
@@ -406,7 +500,6 @@ def plot_provenance(
     overlaid_ax.set_xlabel(r"$\omega$")
 
 
-
 def plot_patch_pair_transform_matrices(
     patch_pair_indices: Int[Tensor, "n_pairs 2"],
     transforms: Float[Tensor, "n_pairs 2"],
@@ -433,8 +526,6 @@ def plot_patch_pair_transform_matrices(
     #     plt.Line2D([0], [0], color="red", marker="s", markersize=10, label="Positive"),
     # ]
     # axes[0].legend(handles=legend_elements)
-    
-
 
 
 def plot_patch_pair_coverage(

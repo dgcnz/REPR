@@ -1,3 +1,0 @@
-head_hook:
-  _target_: src.callbacks.vis.head_hook.HeadHookLogger
-  every_n_steps: 100

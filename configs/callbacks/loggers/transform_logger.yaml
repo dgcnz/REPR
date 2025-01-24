@@ -1,0 +1,5 @@
+# @package callbacks
+transform_logger:
+  _target_: src.callbacks.TransformLogger
+  every_n_steps: -1
+  num_samples: 1
