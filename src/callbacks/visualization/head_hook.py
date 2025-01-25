@@ -38,7 +38,7 @@ class HeadHookLogger(BaseCallback):
         self.handle.remove()
         self.handle = None
         # Create figure 1: Head Input Features histogram
-        fig, axes = plt.subplots(3, figsize=(10, 15))
+        fig, axes = plt.subplots(3, 1, figsize=(10, 15))
         axes[0].hist(self.head_input_features.flatten(), bins=50)
         axes[0].set_title("Head Input Features")
         
