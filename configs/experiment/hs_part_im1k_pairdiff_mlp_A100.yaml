@@ -21,8 +21,8 @@ float32_matmul_precision: "high"
 trainer:
   min_epochs: 15
   max_epochs: 15
-  limit_train_batches: 256
-  limit_val_batches: 256
+  limit_train_batches: 1024
+  limit_val_batches: 1024
   check_val_every_n_epoch: 1
   deterministic: true
   devices: 4
@@ -40,8 +40,8 @@ model:
     lr: 1e-4
   scheduler:
     # 256 * 5 = 1280
-    warmup_t: 1280 
-  scheduler_interval: step
+    warmup_t: 5 
+  scheduler_interval: epoch
 
 
 data:
