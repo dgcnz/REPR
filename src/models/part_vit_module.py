@@ -1,35 +1,15 @@
-import matplotlib
 from types import SimpleNamespace
-
-matplotlib.use("Agg")
 from typing import Any, Dict, Tuple, Callable
-from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
-from copy import copy
 import torch
-import math
 from torch import Tensor
-from lightning import LightningModule
+import lightning as L
 from torchmetrics import MinMetric, MeanMetric
 from torchmetrics.regression import MeanSquaredError
 from src.data.components.sampling_utils import sample_and_stitch
 from src.models.components.part_utils import compute_gt_transform, get_all_pairs
 import matplotlib.pyplot as plt
-from src.utils.visualization.visualization import (
-    create_provenance_grid,
-    plot_provenance,
-    plot_transform_distribution,
-    plot_patch_pair_transform_matrices,
-    plot_patch_pair_coverage,
-    get_transforms_from_reference_patch,
-)
-from src.utils.visualization.reconstruction import (
-    create_image_from_transforms,
-    reconstruct_image_from_sampling,
-)
 from src.utils import pylogger
-import wandb
 from jaxtyping import Float, Int
-from matplotlib.patches import Rectangle
 
 
 class PARTLoss(torch.nn.Module):
@@ -75,7 +55,8 @@ def compute_symmetry_loss(
     return symmetry_loss
 
 
-class PARTViTModule(LightningModule):
+
+class PARTViTModule(L.LightningModule):
     def __init__(
         self,
         net: torch.nn.Module,
@@ -86,7 +67,6 @@ class PARTViTModule(LightningModule):
         sample_mode: str = "offgrid",
         symmetry_penalty: float = 0.0,
         pair_sampler: Callable[[int, int, str], Int[Tensor, "B NP 2"]] = get_all_pairs,
-        compile: bool = False,
         scheduler_interval: str = "step",  # previously "epoch"
     ) -> None:
         """Initialize a `MNISTLitModule`.
@@ -128,21 +108,10 @@ class PARTViTModule(LightningModule):
         """Perform a forward pass through the model `self.net`.
 
         :param x: A tensor of images.
+        :param patch_pair_indices: A tensor of patch pair indices.
         :return: A tensor of logits.
         """
         return self.net(x, patch_pair_indices)
-
-    def on_train_start(self) -> None:
-        """Lightning hook that is called when training begins."""
-        # by default lightning executes validation step sanity checks before training starts,
-        # so it's worth to make sure validation metrics don't store results from these checks
-        self.metrics["val/loss"].reset()
-        self.metrics["val/rmse"].reset()
-        self.metrics["val/rmse_best"].reset()
-        if self.hparams.compile and self.trainer.accelerator == "cpu":
-            self.cli_logger.warning(
-                "Model compilation is enabled but the trainer is not using GPU. "
-            )
 
     def patch_info(self, x: Tensor):
         # return patch_size, num_patches, img_size
@@ -199,135 +168,21 @@ class PARTViTModule(LightningModule):
             "patch_pair_indices": patch_pair_indices,
         }
 
-    def log_common(self, output: dict, stage: str, batch_idx: int):
-        self.metrics[f"{stage}/loss"](output["loss"])
-        self.metrics[f"{stage}/rmse"](
-            output["pred_T"].flatten(0, 1), output["gt_T"].flatten(0, 1)
-        )
-        self.log(
-            f"{stage}/loss",
-            self.metrics[f"{stage}/loss"],
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-        )
-        rmse_y, rmse_x = self.metrics[f"{stage}/rmse"].compute()
-        rmse = (rmse_y + rmse_x) / 2
-        self.log_dict(
-            {
-                f"{stage}/rmse_y": rmse_y,
-                f"{stage}/rmse_x": rmse_x,
-                f"{stage}/rmse": rmse,
-            },
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-        )
-
-        # TODO: might want to move this out to a callback if it slows down training
-        if batch_idx == 0:
-            self.log(
-                f"{stage}/transform_distribution/sample_median",
-                output["pred_T"].median(),
-                on_step=False,
-                on_epoch=True,
-                prog_bar=True,
-            )
-            self.log(
-                f"{stage}/transform_distribution/sample_iqr",
-                output["pred_T"].float().quantile(0.75)
-                - output["pred_T"].float().quantile(0.25),
-                on_step=False,
-                on_epoch=True,
-                prog_bar=True,
-            )
-
     def training_step(
         self, batch: tuple[Tensor, Tensor] | dict[str, Tensor], batch_idx: int
     ) -> Tensor:
-        """Perform a single training step on a batch of data from the training set.
-
-        :param batch: A batch of data (a tuple) containing the input tensor of images and target
-            labels.
-        :param batch_idx: The index of the current batch.
-        :return: A tensor of losses between model predictions and targets.
-        """
-        # forward pass
-        output = self.model_step(batch)
-
-        # update and log metrics
-        self.log_common(output, "train", batch_idx)
-
-        # intrinsically train logs
-        if hasattr(self.net, "logit_scale") and self.net.logit_scale_learnable:
-            self.log(
-                "train/logit_scale", self.net.logit_scale, on_step=False, on_epoch=True
-            )
-        if self.hparams.symmetry_penalty > 0:
-            self.log(
-                "train/symmetry_loss",
-                output["symmetry_loss"],
-                on_step=False,
-                on_epoch=True,
-                prog_bar=True,
-            )
-        return output
+        return self.model_step(batch)
 
     def validation_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
     ) -> None:
-        """Perform a single validation step on a batch of data from the validation set.
+        return self.model_step(batch)
 
-        :param batch: A batch of data (a tuple) containing the input tensor of images and target
-            labels.
-        :param batch_idx: The index of the current batch.
-        """
-        output = self.model_step(batch)
-
-        # update and log metrics
-        self.log_common(output, "val", batch_idx)
-
-    def on_validation_epoch_end(self) -> None:
-        "Lightning hook that is called when a validation epoch ends."
-        mse = self.metrics["val/rmse"].compute()
-        self.metrics["val/rmse_best"](mse)
-        self.log(
-            "val/rmse_best",
-            self.metrics["val/rmse_best"],
-            sync_dist=True,
-            prog_bar=True,
-        )
 
     def test_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
     ) -> None:
-        """Perform a single test step on a batch of data from the test set.
-
-        :param batch: A batch of data (a tuple) containing the input tensor of images and target
-            labels.
-        :param batch_idx: The index of the current batch.
-        """
-        output = self.model_step(batch)
-
-        # update and log metrics
-        self.log_common(output, "test", batch_idx)
-
-    def on_test_epoch_end(self) -> None:
-        """Lightning hook that is called when a test epoch ends."""
-        pass
-
-    def setup(self, stage: str) -> None:
-        """Lightning hook that is called at the beginning of fit (train + validate), validate,
-        test, or predict.
-
-        This is a good hook when you need to build models dynamically or adjust something about
-        them. This hook is called on every process when using DDP.
-
-        :param stage: Either `"fit"`, `"validate"`, `"test"`, or `"predict"`.
-        """
-        if self.hparams.compile and stage == "fit":
-            self._model_step = self.model_step
-            self.model_step = torch.compile(self.model_step)
+        return self.model_step(batch)
 
     def configure_optimizers(self) -> Dict[str, Any]:
         """Choose what optimizers and learning-rate schedulers to use in your optimization.

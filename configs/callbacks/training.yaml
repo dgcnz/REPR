@@ -1,5 +1,5 @@
 defaults:
-  - ema
+  - loggers/metric_logger
   - lr_monitor
   - plotting
 

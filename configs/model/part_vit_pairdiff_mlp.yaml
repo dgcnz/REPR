@@ -32,4 +32,3 @@ sample_mode: "offgrid"
 #   _target_: src.models.components.part_utils.get_all_pairs
 #   _partial_: true
 # compile model for faster training with pytorch 2.0
-compile: false

@@ -26,10 +26,14 @@ trainer:
   check_val_every_n_epoch: 1
   deterministic: true
   devices: 4
+  num_nodes: 1
+  sync_batchnorm: true
+
+  strategy:
+    _target_: src.strategies.ddp_compile.DDPCompileStrategy
 
 
 model:
-  compile: true
   net:
     backbone:
       img_size: 224

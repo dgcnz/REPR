@@ -28,7 +28,6 @@ trainer:
   deterministic: true
 
 model:
-  compile: true
   net:
     backbone:
       img_size: 224
