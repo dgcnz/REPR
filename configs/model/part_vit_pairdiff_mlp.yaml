@@ -25,7 +25,7 @@ net:
   logit_scale_init: ${model.net.backbone.img_size}
   logit_scale_tanh: True
 
-symmetry_penalty: 0.005
+symmetry_penalty: 0
 patch_size: ${model.net.backbone.patch_size}
 sample_mode: "offgrid"
 # pair_sampler:
