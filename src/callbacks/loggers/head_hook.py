@@ -10,11 +10,13 @@ from src.callbacks.base_callback import BaseCallback
 class HeadHookLogger(BaseCallback):
     def __init__(self, every_n_steps: int = -1):
         super().__init__()
-        self.head_input_features = []
-        self.head_outputs = []
-        self.model_output = []
         self.every_n_steps = every_n_steps
         self.handles = []
+
+        # Hook data
+        self.head_input_features = None
+        self.head_outputs = None
+        self.model_output = None
 
     def _head_hook_fn(self, module, input, output):
         self.head_input_features = clean_tensor(input[0])
@@ -37,32 +39,55 @@ class HeadHookLogger(BaseCallback):
         if should_log(batch_idx, self.every_n_steps):
             self._attach_hooks(pl_module)
 
+    def _detach_hooks(self):
+        for handle in self.handles:
+            handle.remove()
+        self.handles = []
+
+    def _clean_hook_data(self):
+        self.head_input_features = None
+        self.head_outputs = None
+        self.model_output = None
+
+    def _plot(self, axes: plt.Axes, pl_module, _hist_kwargs: list[dict] | dict = dict()) :
+        _hist_kwargs = _hist_kwargs or {} # if [] or None, default to {}
+        if isinstance(_hist_kwargs, dict):
+            _hist_kwargs = [_hist_kwargs] * 4
+        assert len(_hist_kwargs) == 4
+
+        axes[0].hist(self.head_input_features.flatten(), bins=50, **_hist_kwargs[0])
+        std = self.head_input_features.std().item()
+        axes[0].set_title(f"Head Input Features | std: {std:.2f}")
+        
+        # Create figure 2: Head Outputs histogram
+        axes[1].hist(self.head_outputs.flatten(), bins=50, **_hist_kwargs[1])
+        std = self.head_outputs.std().item()
+        axes[1].set_title(f"Head Outputs | std: {std:.2f}")
+
+        
+        # Create figure 3: PairDiff Weights histogram (if applicable)
+        if isinstance(pl_module.net.head, PairDiffMLP):
+            axes[2].hist(clean_tensor(pl_module.net.head.proj.weight).flatten(), bins=50, **_hist_kwargs[2])
+            std = pl_module.net.head.proj.weight.std().item()
+            axes[2].set_title(f"PairDiff Weights | std: {std:.2f}")
+
+
+        # Create figure 4: Model Output histogram
+        axes[3].hist(self.model_output.flatten(), bins=50, **_hist_kwargs[3])
+        std = self.model_output.std().item()
+        axes[3].set_title(f"Model Output | std: {std:.2f}")
+
+
+
     @rank_zero_only
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if not should_log(batch_idx, self.every_n_steps):
             return
-        
         assert self.handles
-        for handle in self.handles:
-            handle.remove()
-        self.handles = []
-        # Create figure 1: Head Input Features histogram
-        fig, axes = plt.subplots(4, 1, figsize=(10, 20))
-        axes[0].hist(self.head_input_features.flatten(), bins=50)
-        axes[0].set_title("Head Input Features")
-        
-        # Create figure 2: Head Outputs histogram
-        axes[1].hist(self.head_outputs.flatten(), bins=50)
-        axes[1].set_title("Head Outputs")
-        
-        # Create figure 3: PairDiff Weights histogram (if applicable)
-        if isinstance(pl_module.net.head, PairDiffMLP):
-            axes[2].hist(clean_tensor(pl_module.net.head.proj.weight).flatten(), bins=50)
-            axes[2].set_title("PairDiff Weights")
+        self._detach_hooks()
 
-        # Create figure 4: Model Output histogram
-        axes[3].hist(self.model_output.flatten(), bins=50)
-        axes[3].set_title("Model Output")
+        fig, axes = plt.subplots(4, 1, figsize=(10, 20))
+        self._plot(axes, pl_module)
 
         self.log_plots(
             {

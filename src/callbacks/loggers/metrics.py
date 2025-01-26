@@ -68,6 +68,7 @@ class MetricLogger(BaseCallback):
             print("ERROR ON COMPUTE COMMON")
             print(e.__traceback__)
             print(e)
+            raise e
 
     def log_common(
         self, pl_module: L.LightningModule, output: dict, stage: str, batch_idx: int
