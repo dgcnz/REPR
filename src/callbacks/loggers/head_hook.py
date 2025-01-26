@@ -10,8 +10,9 @@ from src.callbacks.base_callback import BaseCallback
 class HeadHookLogger(BaseCallback):
     def __init__(self, every_n_steps: int = -1):
         super().__init__()
-        self.head_inputs = []
+        self.head_input_features = []
         self.head_outputs = []
+        self.model_output = []
         self.every_n_steps = every_n_steps
         self.handles = []
 
@@ -22,16 +23,19 @@ class HeadHookLogger(BaseCallback):
     
     def _model_hook_fn(self, module, input, output):
         # rescale by logit_scale to [-1, 1]
-        self.model_output = clean_tensor(output) / module.logit_scale
+        self.model_output = clean_tensor(output / module.logit_scale) 
+
+    def _attach_hooks(self, pl_module):
+        self.handles =[
+            pl_module.net.head.register_forward_hook(self._head_hook_fn),
+            pl_module.net.register_forward_hook(self._model_hook_fn)
+        ]
 
     @rank_zero_only
     def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
         # Only register the hook
         if should_log(batch_idx, self.every_n_steps):
-            self.handles =[
-                pl_module.net.head.register_forward_hook(self._head_hook_fn),
-                pl_module.net.register_forward_hook(self._model_hook_fn)
-            ]
+            self._attach_hooks(pl_module)
 
     @rank_zero_only
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
