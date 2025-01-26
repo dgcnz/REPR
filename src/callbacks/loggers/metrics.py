@@ -89,20 +89,38 @@ class MetricLogger(BaseCallback):
             sync_dist=True,
         )
 
-        # TODO: might want to move this out to a callback if it slows down training
         if batch_idx == 0:
+            # TODO: Maybe move this to a separate callback, it throws an error:
+            # https://github.com/pytorch/pytorch/issues/64947
+            # pl_module.log(
+            #     f"{stage}/transform_distribution/sample_median",
+            #     output["pred_T"].median(),
+            #     on_step=False,
+            #     on_epoch=True,
+            #     prog_bar=True,
+            #     sync_dist=True,
+            # )
+            # pl_module.log(
+            #     f"{stage}/transform_distribution/sample_iqr",
+            #     output["pred_T"].float().quantile(0.75)
+            #     - output["pred_T"].float().quantile(0.25),
+            #     on_step=False,
+            #     on_epoch=True,
+            #     prog_bar=True,
+            #     sync_dist=True,
+            # )
+            # In the meantime log the mean and std
             pl_module.log(
-                f"{stage}/transform_distribution/sample_median",
-                output["pred_T"].median(),
+                f"{stage}/transform_distribution/sample_mean",
+                output["pred_T"].mean(),
                 on_step=False,
                 on_epoch=True,
                 prog_bar=True,
                 sync_dist=True,
             )
             pl_module.log(
-                f"{stage}/transform_distribution/sample_iqr",
-                output["pred_T"].float().quantile(0.75)
-                - output["pred_T"].float().quantile(0.25),
+                f"{stage}/transform_distribution/sample_std",
+                output["pred_T"].std(),
                 on_step=False,
                 on_epoch=True,
                 prog_bar=True,
