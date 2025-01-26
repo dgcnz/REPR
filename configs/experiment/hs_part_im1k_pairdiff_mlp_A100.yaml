@@ -20,9 +20,7 @@ float32_matmul_precision: "high"
 
 trainer:
   min_epochs: 15
-  max_epochs: 15
-  limit_train_batches: 1024
-  limit_val_batches: 1024
+  max_epochs: 200
   check_val_every_n_epoch: 1
   deterministic: true
   devices: 4
@@ -38,7 +36,7 @@ model:
     backbone:
       img_size: 224
       patch_size: 16
-  sample_mode: ongrid
+  sample_mode: offgrid
 
   optimizer:
     lr: 1e-4

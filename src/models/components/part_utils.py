@@ -38,40 +38,6 @@ def get_all_pairs(b: int, n: int, device="cpu") -> Float[Tensor, "b n*n 2"]:
     )
 
 
-# def get_all_pairs_by_ongrid_regions(
-#     batch_size: int, n_patches: int, region_size: int, device="cpu"
-# ):
-#     n_region_pairs = region_size**2
-#     # the first nk patches are the first region and all pairs are sampled within this region,
-#     # the next nk patches are the second region and so on
-#     # Calculate number of regions
-#     n_regions = n_patches // n_region_pairs
-#
-#     # Initialize list to store pairs for each region
-#     pairs_list = []
-#
-#     # For each region
-#     for r in range(n_regions):
-#         # Get start index for current region
-#         start_idx = r * n_region_pairs
-#
-#         # Generate all pairs within this region
-#         region_pairs = torch.stack(
-#             torch.meshgrid(
-#                 torch.arange(start_idx, start_idx + n_region_pairs, device=device),
-#                 torch.arange(start_idx, start_idx + n_region_pairs, device=device),
-#             ),
-#             dim=-1,
-#         )
-#
-#         # Reshape and add to list
-#         pairs_list.append(region_pairs.reshape(1, -1, 2))
-#
-#     # Concatenate all pairs and expand to batch size
-#     all_pairs = torch.cat(pairs_list, dim=1)
-#     return all_pairs.expand(batch_size, -1, -1)
-
-
 def get_all_pairs_by_ongrid_regions(
     batch_size: int,
     n_patches: int,

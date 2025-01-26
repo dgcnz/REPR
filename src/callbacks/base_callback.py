@@ -8,7 +8,7 @@ class BaseCallback(L.Callback):
         pass
     def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
         self.on_stage_batch_start(trainer, pl_module, batch, batch_idx, "train")
-    def on_val_batch_start(self, trainer, pl_module, batch, batch_idx):
+    def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx):
         self.on_stage_batch_start(trainer, pl_module, batch, batch_idx, "val")
     def on_test_batch_start(self, trainer, pl_module, batch, batch_idx):
         self.on_stage_batch_start(trainer, pl_module, batch, batch_idx, "test")
@@ -17,7 +17,7 @@ class BaseCallback(L.Callback):
         pass
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         self.on_stage_batch_end(trainer, pl_module, outputs, batch, batch_idx, "train")
-    def on_val_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         self.on_stage_batch_end(trainer, pl_module, outputs, batch, batch_idx, "val")
     def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         self.on_stage_batch_end(trainer, pl_module, outputs, batch, batch_idx, "test")
