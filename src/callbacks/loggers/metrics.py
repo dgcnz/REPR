@@ -59,16 +59,10 @@ class MetricLogger(BaseCallback):
         )
 
     def compute_common(self, pl_module: L.LightningModule, output: dict, stage: str):
-        try:
-            pl_module.metrics[f"{stage}/loss"](output["loss"])
-            pl_module.metrics[f"{stage}/rmse"](
-                output["pred_T"].flatten(0, 1), output["gt_T"].flatten(0, 1)
-            )
-        except Exception as e:
-            print("ERROR ON COMPUTE COMMON")
-            print(e.__traceback__)
-            print(e)
-            raise e
+        pl_module.metrics[f"{stage}/loss"](output["loss"])
+        pl_module.metrics[f"{stage}/rmse"](
+            output["pred_T"].flatten(0, 1), output["gt_T"].flatten(0, 1)
+        )
 
     def log_common(
         self, pl_module: L.LightningModule, output: dict, stage: str, batch_idx: int
@@ -96,6 +90,22 @@ class MetricLogger(BaseCallback):
         )
 
         if batch_idx == 0:
+            pl_module.log(
+                f"{stage}/transform_distribution/sample_mean",
+                output["pred_T"].mean(),
+                on_step=False,
+                on_epoch=True,
+                prog_bar=True,
+                sync_dist=True,
+            )
+            pl_module.log(
+                f"{stage}/transform_distribution/sample_std",
+                output["pred_T"].std(),
+                on_step=False,
+                on_epoch=True,
+                prog_bar=True,
+                sync_dist=True,
+            )
             # TODO: Maybe move this to a separate callback, it throws an error:
             # https://github.com/pytorch/pytorch/issues/64947
             # pl_module.log(
@@ -116,19 +126,3 @@ class MetricLogger(BaseCallback):
             #     sync_dist=True,
             # )
             # In the meantime log the mean and std
-            pl_module.log(
-                f"{stage}/transform_distribution/sample_mean",
-                output["pred_T"].mean(),
-                on_step=False,
-                on_epoch=True,
-                prog_bar=True,
-                sync_dist=True,
-            )
-            pl_module.log(
-                f"{stage}/transform_distribution/sample_std",
-                output["pred_T"].std(),
-                on_step=False,
-                on_epoch=True,
-                prog_bar=True,
-                sync_dist=True,
-            )

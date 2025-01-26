@@ -1,11 +1,9 @@
 from src.utils.visualization import (
-    get_center_refpatch_id,
     plot_reconstructions,
     get_transforms_from_reference_patch_batch,
     plot_provenances_batch,
 )
 from src.utils.visualization.reconstruction import _get_refpatch_id_batch
-import lightning as L
 from lightning.pytorch.utilities import rank_zero_only
 from src.utils.misc import should_log
 from src.callbacks.base_callback import BaseCallback
