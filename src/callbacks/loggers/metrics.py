@@ -59,10 +59,15 @@ class MetricLogger(BaseCallback):
         )
 
     def compute_common(self, pl_module: L.LightningModule, output: dict, stage: str):
-        pl_module.metrics[f"{stage}/loss"](output["loss"])
-        pl_module.metrics[f"{stage}/rmse"](
-            output["pred_T"].flatten(0, 1), output["gt_T"].flatten(0, 1)
-        )
+        try:
+            pl_module.metrics[f"{stage}/loss"](output["loss"])
+            pl_module.metrics[f"{stage}/rmse"](
+                output["pred_T"].flatten(0, 1), output["gt_T"].flatten(0, 1)
+            )
+        except Exception as e:
+            print("ERROR ON COMPUTE COMMON")
+            print(e.__traceback__)
+            print(e)
 
     def log_common(
         self, pl_module: L.LightningModule, output: dict, stage: str, batch_idx: int
