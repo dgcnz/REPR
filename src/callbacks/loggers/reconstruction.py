@@ -15,9 +15,13 @@ class ReconstructionLogger(BaseCallback):
         self.every_n_steps = every_n_steps
         self.num_samples = num_samples
 
-    def _plot(self, pl_module, x_original, x, patch_positions, pred_T, patch_pair_indices):
+    def _plot(
+        self, pl_module, x_original, x, patch_positions, pred_T, patch_pair_indices
+    ):
         img_size: tuple[int, int] = x_original.shape[-2:]
-        refpatch_id = _get_refpatch_id_batch(patch_positions[:self.num_samples], img_size)
+        refpatch_id = _get_refpatch_id_batch(
+            patch_positions[: self.num_samples], img_size
+        )
         refpatch_id = refpatch_id.tolist()
 
         ref_transforms = get_transforms_from_reference_patch_batch(
@@ -40,7 +44,6 @@ class ReconstructionLogger(BaseCallback):
         )
         return fig_rec, fig_prov
 
-
     @rank_zero_only
     def on_stage_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, stage: str
@@ -50,11 +53,11 @@ class ReconstructionLogger(BaseCallback):
         c = pl_module.cache
         fig_rec, fig_prov = self._plot(
             pl_module,
-            c["x_original"],
-            c["x"],
-            c["patch_positions"],
-            c["pred_T"],
-            c["patch_pair_indices"],
+            c.x_original,
+            c.x,
+            c.patch_positions,
+            c.pred_T,
+            c.patch_pair_indices,
         )
         self.log_plots(
             {
