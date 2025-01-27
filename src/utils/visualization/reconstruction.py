@@ -5,8 +5,10 @@ from matplotlib.patches import Rectangle
 import matplotlib.pyplot as plt
 from copy import copy
 
+
 def get_center_refpatch_id(
-        patch_positions: Int[Tensor, "B n_patches 2"], image_size: tuple[int, int],
+    patch_positions: Int[Tensor, "B n_patches 2"],
+    image_size: tuple[int, int],
 ) -> Int[Tensor, "B"]:
     """
     Get the reference patch id which is the closest to the center of the image
@@ -18,30 +20,20 @@ def get_center_refpatch_id(
     ) ** 2
     return torch.argmin(distances, dim=1)
 
-def _get_refpatch_id(
-    patch_positions: Int[Tensor, "n_patches 2"], img_size: tuple[int, int]
-):
-    # strategy:
-    # - get the position closest to the center of the image (ideal)
-    # - get the closest patch to that position
-
-    # get the ideal refpatch position
-    ideal_refpatch_yx = torch.tensor(img_size) // 2
-    # get the closest (in l1 distance) index to the ideal refpatch from the patch_positions
-    refpatch_id = torch.argmin(
-        (patch_positions - ideal_refpatch_yx).abs().sum(1)
-    ).item()
-    return refpatch_id
 
 def _get_refpatch_id_batch(
     patch_positions: Int[Tensor, "B n_patches 2"], img_size: tuple[int, int]
-):
-    return [
-            _get_refpatch_id(patch_positions[i], img_size)
-            for i in range(patch_positions.size(0))
-        ]
-
-
+) -> Int[Tensor, "B"]:
+    # Create ideal refpatch positions for all batches at once
+    ideal_refpatch_yx = torch.tensor(img_size, device=patch_positions.device) // 2
+    
+    # Compute L1 distances in batched manner
+    distances = (patch_positions - ideal_refpatch_yx.view(1, 1, 2)).abs().sum(2)
+    
+    # Get closest patch index for each batch
+    refpatch_ids = torch.argmin(distances, dim=1)
+    
+    return refpatch_ids
 
 
 def create_image_from_transforms(
