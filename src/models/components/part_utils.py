@@ -1,5 +1,6 @@
 import torch
 from jaxtyping import Float, Int
+from typing import Callable
 from torch import Tensor
 from src.utils.fancy_indexing import index_pairs
 
@@ -98,6 +99,48 @@ def pivot_to_all_pairs(b: int, n: int, device="cpu", pivot=0) -> Float[Tensor, "
     idx = torch.full((b, n), pivot, dtype=torch.long, device=device)
     jdx = torch.arange(n, device=device).unsqueeze(0).expand(b, -1)
     return torch.stack([idx, jdx], dim=2)
+
+class PARTLoss(torch.nn.Module):
+    def __init__(self, img_size: tuple[int, int], f: Callable | None = None):
+        super().__init__()
+        self.f = f
+        self.img_size = img_size
+        self.max_T = max(img_size)
+        self.min_T = -self.max_T
+
+    def forward(self, pred_T: Tensor, gt_T: Tensor):
+        pred_T = (pred_T - self.min_T) / (self.max_T - self.min_T)
+        gt_T = (gt_T - self.min_T) / (self.max_T - self.min_T)
+        loss = self.f(torch.abs(pred_T - gt_T)).sum()
+        return loss
+
+
+def compute_symmetry_loss(
+    patch_pair_indices: Int[Tensor, "B n_pairs 2"],
+    transforms: Float[Tensor, "B n_pairs 2"],
+    n_patches: int,
+) -> Tensor:
+    batch_size = patch_pair_indices.shape[0]
+    T_matrix = torch.zeros(
+        batch_size,
+        n_patches,
+        n_patches,
+        2,
+        device=transforms.device,
+        dtype=transforms.dtype,
+    )
+
+    batch_idx = (
+        torch.arange(batch_size, device=transforms.device)
+        .unsqueeze(1)
+        .repeat(1, patch_pair_indices.shape[1])
+    )
+    T_matrix[batch_idx, patch_pair_indices[..., 0], patch_pair_indices[..., 1]] = (
+        transforms
+    )
+
+    symmetry_loss = (T_matrix + T_matrix.transpose(1, 2)).abs().mean()
+    return symmetry_loss
 
 
 if __name__ == "__main__":

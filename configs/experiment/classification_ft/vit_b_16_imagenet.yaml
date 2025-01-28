@@ -1,0 +1,46 @@
+# @package _global_
+
+# to execute this experiment run:
+# python train.py experiment=example
+
+defaults:
+  - override /data: im1k
+  - override /model: classification_ft/vit_b_16_224
+  - override /callbacks:
+    - loggers/classification_ft/metric_logger
+    - lr_monitor
+  - override /trainer: gpu
+  - override /logger: wandb
+
+
+tags: ["classification_ft"]
+
+seed: 12345
+float32_matmul_precision: "high"
+
+trainer:
+  min_epochs: 15
+  max_epochs: 50
+  check_val_every_n_epoch: 1
+  deterministic: true
+  accumulate_grad_batches: 8
+  strategy: 
+    _target_: src.strategies.compile.CompileStrategy
+
+model:
+  num_classes: 1000
+  optimizer:
+    lr: 2e-4
+  # scheduler:
+  #   warmup_t: 1280 # 256 * 5
+
+data:
+  batch_size: 128
+  num_workers: 8
+  test_fraction: 0.2
+
+logger:
+  wandb:
+    project: "PARTv2-classification-ft"
+
+

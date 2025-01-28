@@ -1,0 +1,25 @@
+_target_: src.models.image_classification_module.ImageClassificationModule
+
+defaults:
+  - /scheduler: deit_cosine_sched
+  - /optimizer: deit_adamw
+  - /criterion@criterion_fn: cross_entropy
+
+net:
+  _target_: timm.create_model
+  model_name: vit_base_patch16_224
+  pretrained: True
+  num_classes: ${model.num_classes}
+  global_pool: "avg"
+  class_token: False
+  pos_embed: "none"
+  embed_dim: 768
+  img_size: 224
+  patch_size: 16
+  pretrained_strict: False
+  pretrained_cfg_overlay:
+    file: 
+      _target_: src.models.part_vit_module.PARTViTModule.save_backbone
+      module_ckpt_path: "artifacts/model-ukjrb3lq:v0/epoch=41-step=52584.ckpt"
+
+num_classes: ???

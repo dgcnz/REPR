@@ -37,19 +37,24 @@ CIFAR10_TRAIN_TRANSFORM = timm.data.create_transform(
     color_jitter=0.4,
     auto_augment="rand-m9-mstd0.5-inc1",
     interpolation="bicubic",
-    re_prob=0, # 0.25 when finetuning for classification
+    re_prob=0,  # 0.25 when finetuning for classification
     re_mode="pixel",
     re_count=1,
 )
 
 
-def to_hf_transform(transform: Callable, img_key: str = "image") -> Callable:
+def to_hf_transform(
+    transform: Callable, img_key: str = "image", label_key: str | None = "label"
+) -> Callable:
     if transform is None:
         transform = TTv2.ToTensor()
+
     def _transform(batch):
-        return {
-            "image": [transform(x) for x in batch[img_key]],
-        }
+        out = dict()
+        if label_key is not None:
+            out[label_key] = batch[label_key]
+        return out | {img_key: [transform(x) for x in batch[img_key]]}
+
     return _transform
 
 
@@ -60,10 +65,12 @@ class HFDataModule(LightningDataModule):
         train_transform: Callable = DEFAULT_TEST_TRANSFORM,
         test_transform: Callable = DEFAULT_TEST_TRANSFORM,
         img_key: str = "image",
+        label_key: str | None = None,
         batch_size: int = 64,
         num_workers: int = 0,
         pin_memory: bool = False,
-        val_fraction: float = None,
+        val_fraction: float = None, # split train into train/val
+        test_fraction: float = None, # split val into val/test
         cache_dir: str | None = None,
     ) -> None:
         """Initialize a `HFDataModule`.
@@ -80,16 +87,16 @@ class HFDataModule(LightningDataModule):
 
         self.dataset_name = dataset_name
         self.img_key = img_key
+        self.label_key = label_key
         self.data_train: Optional[Dataset] = None
         self.data_val: Optional[Dataset] = None
         self.data_test: Optional[Dataset] = None
 
-        self.train_transform = to_hf_transform(train_transform, img_key)
-        self.test_transform = to_hf_transform(test_transform, img_key)
+        self.train_transform = to_hf_transform(train_transform, img_key, label_key)
+        self.test_transform = to_hf_transform(test_transform, img_key, label_key)
 
         self.batch_size_per_device = batch_size
         self.cli_logger = logging.getLogger(self.__class__.__name__)
-
 
     def prepare_data(self) -> None:
         """Download data if needed. Lightning ensures that `self.prepare_data()` is called only
@@ -130,8 +137,10 @@ class HFDataModule(LightningDataModule):
 
         # load and split datasets only if not loaded already
         if not self.data_train and not self.data_val and not self.data_test:
-            ds = load_dataset(self.dataset_name, cache_dir=self.hparams.cache_dir).with_format("torch")
-            self.data_test = ds["test"]
+            ds = load_dataset(
+                self.dataset_name, cache_dir=self.hparams.cache_dir
+            ).with_format("torch")
+
             if "validation" in ds:
                 self.data_train = ds["train"]
                 self.data_val = ds["validation"]
@@ -139,6 +148,7 @@ class HFDataModule(LightningDataModule):
                 self.data_train = ds["train"]
                 self.data_val = ds["val"]
             else:
+                # split train into train/val
                 if self.hparams.val_fraction is None:
                     raise ValueError(
                         "Validation fraction must be provided if no validation set is found."
@@ -148,6 +158,16 @@ class HFDataModule(LightningDataModule):
                 )
                 self.data_train = splits["train"]
                 self.data_val = splits["test"]
+
+            # split validation set into validation and test sets 
+            if self.hparams.test_fraction is None:
+                self.data_test = ds["test"]
+            else:
+                splits = self.data_val.train_test_split(
+                    test_size=self.hparams.test_fraction
+                )
+                self.data_val = splits["train"]
+                self.data_test = splits["test"]
 
             self.data_train.set_transform(self.train_transform)
             self.data_val.set_transform(self.train_transform)
