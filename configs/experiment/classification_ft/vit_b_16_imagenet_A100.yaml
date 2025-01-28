@@ -37,6 +37,11 @@ model:
     warmup_t: 5
   scheduler_interval: epoch
 
+  net:
+    pretrained_cfg_overlay:
+      file:
+        module_ckpt_path: "logs/train/runs/2025-01-26_23-51-51/PARTv2/ukjrb3lq/checkpoints/epoch\=41-step\=52584.ckpt"
+
 data:
   batch_size: 1024
   num_workers: 16
