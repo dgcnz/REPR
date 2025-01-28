@@ -25,7 +25,7 @@ trainer:
   deterministic: true
   devices: 4
   num_nodes: 1
-  sync_bachnorm: true
+  sync_batchnorm: true
   strategy:
     _target_: src.strategies.ddp_compile.DDPCompileStrategy
 
