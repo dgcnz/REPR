@@ -149,6 +149,7 @@ class HFDataModule(LightningDataModule):
 
         # load and split datasets only if not loaded already
         if not self.data_train and not self.data_val and not self.data_test:
+            self.cli_logger.info("Loading datasets.")
             ds = load_dataset(
                 self.dataset_name, cache_dir=self.hparams.cache_dir
             ).with_format("torch")
@@ -160,6 +161,7 @@ class HFDataModule(LightningDataModule):
             if self.prev_label_key is not None and self.prev_label_key != LABEL_KEY:
                 column_mapping[self.prev_label_key] = LABEL_KEY
             if column_mapping:
+                self.cli_logger.info(f"Renaming dataset columns: {column_mapping}")
                 ds = ds.rename_columns(column_mapping)
 
             # split datasets
@@ -185,15 +187,18 @@ class HFDataModule(LightningDataModule):
             if self.hparams.test_fraction is None:
                 self.data_test = ds["test"]
             else:
+                self.cli_logger.info("Splitting validation set into validation and test sets.")
                 splits = self.data_val.train_test_split(
-                    test_size=self.hparams.test_fraction
+                    test_size=self.hparams.test_fraction, shuffle=False
                 )
                 self.data_val = splits["train"]
                 self.data_test = splits["test"]
+                self.cli_logger.info(f"Finished splitting validation set into validation and test sets.")
 
             self.data_train.set_transform(to_hf_transform(self.train_transform))
             self.data_val.set_transform(to_hf_transform(self.train_transform))
             self.data_test.set_transform(to_hf_transform(self.test_transform))
+            self.cli_logger.info("Finished setting up datasets.")
 
     def train_dataloader(self) -> DataLoader[Any]:
         """Create and return the train dataloader.
@@ -202,6 +207,7 @@ class HFDataModule(LightningDataModule):
         """
         collate_fn = None
         if self.hparams.mixup is not None:
+            self.cli_logger.info("Using Mixup.")
             collate_fn = hf_mixup_fn(self.hparams.mixup)
         return DataLoader(
             dataset=self.data_train,
