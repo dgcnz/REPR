@@ -16,6 +16,7 @@ source .venv/bin/activate
 
 # export NCCL_DEBUG=INFO
 # export NCCL_DEBUG_SUBSYS=ALL
+export TORCH_LOGS=dynamo
 export PYTHONFAULTHANDLER=1
 
 srun python -m src.train experiment=classification_ft/vit_b_16_imagenet_A100
