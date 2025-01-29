@@ -28,7 +28,6 @@ class ClassificationFTMetricLogger(BaseCallback):
             pl_module.metrics["val/acc_best"].compute(),
             sync_dist=True,
             prog_bar=True,
-            rank_zero_only=True,
         )
 
     def compute_common(self, pl_module: L.LightningModule, output: dict, stage: str):

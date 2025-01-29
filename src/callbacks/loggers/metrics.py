@@ -8,6 +8,7 @@ from lightning.pytorch.utilities import rank_zero_only
 
 class MetricLogger(BaseCallback):
     def on_train_start(self, trainer, pl_module):
+        pl_module.cli_logger.info("Training started.")
         pl_module.metrics["val/loss"].reset()
         pl_module.metrics["val/rmse"].reset()
         pl_module.metrics["val/rmse_best"].reset()
@@ -47,7 +48,11 @@ class MetricLogger(BaseCallback):
         self.compute_common(pl_module, outputs, "test")
         self.log_common(pl_module, outputs, "test", batch_idx)
 
+    def on_train_epoch_end(self, trainer, pl_module):
+        pl_module.cli_logger.info("Train epoch ended.")
+
     def on_validation_epoch_end(self, trainer, pl_module):
+        pl_module.cli_logger.info("Validation epoch ended.")
         mse = pl_module.metrics["val/rmse"].compute()
         pl_module.metrics["val/rmse_best"](mse)
         pl_module.log(
