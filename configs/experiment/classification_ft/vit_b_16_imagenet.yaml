@@ -31,6 +31,10 @@ model:
   num_classes: 1000
   optimizer:
     lr: 2e-4
+  net:
+    pos_embed: 'learn'
+    drop_path: 0.1 # from droppos finetune 1k
+  
   # scheduler:
   #   warmup_t: 1280 # 256 * 5
 

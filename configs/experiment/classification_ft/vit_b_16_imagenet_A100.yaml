@@ -31,10 +31,13 @@ trainer:
 model:
   num_classes: 1000
   optimizer:
-    lr: 1e-4
+    lr: 5e-5
   scheduler:
     warmup_t: 5
   scheduler_interval: epoch
+  net:
+    pos_embed: 'learn'
+    drop_path: 0.1 # from droppos finetune 1k
 
   net:
     pretrained_cfg_overlay:
