@@ -1,5 +1,7 @@
+# @package callbacks
 defaults:
-  - training
+  - /callbacks/classification_ft/loggers/metric_logger
+  - lr_monitor
   - early_stopping
   - model_checkpoint
   - model_summary
@@ -7,17 +9,16 @@ defaults:
   - _self_
 
 model_checkpoint:
-  dirpath: ${paths.output_dir}/checkpoints
   filename: "epoch_{epoch:03d}"
-  monitor: "val/mse"
-  mode: "min"
+  monitor: "val/acc"
+  mode: "max"
   save_last: True
   auto_insert_metric_name: False
 
 early_stopping:
-  monitor: "val/mse"
+  monitor: "val/acc"
   patience: 100
-  mode: "min"
+  mode: "max"
 
 model_summary:
   max_depth: -1

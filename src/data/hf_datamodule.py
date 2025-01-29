@@ -1,5 +1,6 @@
 from typing import Any, Dict, Optional, Callable
 
+import functools
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 import torchvision.transforms.v2 as TTv2
@@ -8,6 +9,7 @@ import torch
 import logging
 import timm.data
 from datasets import Dataset
+from timm.data import Mixup, FastCollateMixup
 
 logging.basicConfig(level=logging.INFO)
 
@@ -42,20 +44,27 @@ CIFAR10_TRAIN_TRANSFORM = timm.data.create_transform(
     re_count=1,
 )
 
+IMG_KEY = "image"
+LABEL_KEY = "label"
 
-def to_hf_transform(
-    transform: Callable, img_key: str = "image", label_key: str | None = "label"
-) -> Callable:
-    if transform is None:
-        transform = TTv2.ToTensor()
 
+def to_hf_transform(transform: Callable) -> Callable:
+    @functools.wraps(transform)
     def _transform(batch):
-        out = dict()
-        if label_key is not None:
-            out[label_key] = batch[label_key]
-        return out | {img_key: [transform(x) for x in batch[img_key]]}
+        batch[IMG_KEY] = [transform(x.convert("RGB")) for x in batch[IMG_KEY]]
+        return batch
 
     return _transform
+
+def hf_mixup_fn(mixup_fn: Callable) -> Callable:
+    @functools.wraps(mixup_fn)
+    def _mixup_fn(batch: list[dict]):
+        batch = torch.utils.data._utils.collate.default_collate(batch)
+        # default collate
+        batch = mixup_fn(batch[IMG_KEY], batch[LABEL_KEY])
+        # reverts to dict
+        return {IMG_KEY: batch[0], LABEL_KEY: batch[1]}
+    return _mixup_fn
 
 
 class HFDataModule(LightningDataModule):
@@ -69,8 +78,9 @@ class HFDataModule(LightningDataModule):
         batch_size: int = 64,
         num_workers: int = 0,
         pin_memory: bool = False,
-        val_fraction: float = None, # split train into train/val
-        test_fraction: float = None, # split val into val/test
+        val_fraction: float = None,  # split train into train/val
+        test_fraction: float = None,  # split val into val/test
+        mixup: FastCollateMixup | None = None,
         cache_dir: str | None = None,
     ) -> None:
         """Initialize a `HFDataModule`.
@@ -91,9 +101,11 @@ class HFDataModule(LightningDataModule):
         self.data_train: Optional[Dataset] = None
         self.data_val: Optional[Dataset] = None
         self.data_test: Optional[Dataset] = None
+        self.prev_img_key = img_key
+        self.prev_label_key = label_key
 
-        self.train_transform = to_hf_transform(train_transform, img_key, label_key)
-        self.test_transform = to_hf_transform(test_transform, img_key, label_key)
+        self.train_transform = train_transform
+        self.test_transform = test_transform
 
         self.batch_size_per_device = batch_size
         self.cli_logger = logging.getLogger(self.__class__.__name__)
@@ -141,6 +153,16 @@ class HFDataModule(LightningDataModule):
                 self.dataset_name, cache_dir=self.hparams.cache_dir
             ).with_format("torch")
 
+            # rename dataset keys to the standard "image" and "label"
+            column_mapping = dict()
+            if self.prev_img_key != IMG_KEY:
+                column_mapping[self.prev_img_key] = IMG_KEY
+            if self.prev_label_key is not None and self.prev_label_key != LABEL_KEY:
+                column_mapping[self.prev_label_key] = LABEL_KEY
+            if column_mapping:
+                ds = ds.rename_columns(column_mapping)
+
+            # split datasets
             if "validation" in ds:
                 self.data_train = ds["train"]
                 self.data_val = ds["validation"]
@@ -159,7 +181,7 @@ class HFDataModule(LightningDataModule):
                 self.data_train = splits["train"]
                 self.data_val = splits["test"]
 
-            # split validation set into validation and test sets 
+            # split validation set into validation and test sets
             if self.hparams.test_fraction is None:
                 self.data_test = ds["test"]
             else:
@@ -169,21 +191,25 @@ class HFDataModule(LightningDataModule):
                 self.data_val = splits["train"]
                 self.data_test = splits["test"]
 
-            self.data_train.set_transform(self.train_transform)
-            self.data_val.set_transform(self.train_transform)
-            self.data_test.set_transform(self.test_transform)
+            self.data_train.set_transform(to_hf_transform(self.train_transform))
+            self.data_val.set_transform(to_hf_transform(self.train_transform))
+            self.data_test.set_transform(to_hf_transform(self.test_transform))
 
     def train_dataloader(self) -> DataLoader[Any]:
         """Create and return the train dataloader.
 
         :return: The train dataloader.
         """
+        collate_fn = None
+        if self.hparams.mixup is not None:
+            collate_fn = hf_mixup_fn(self.hparams.mixup)
         return DataLoader(
             dataset=self.data_train,
             batch_size=self.batch_size_per_device,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
             shuffle=True,
+            collate_fn=collate_fn,
         )
 
     def val_dataloader(self) -> DataLoader[Any]:

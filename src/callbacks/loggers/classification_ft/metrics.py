@@ -33,7 +33,9 @@ class ClassificationFTMetricLogger(BaseCallback):
 
     def compute_common(self, pl_module: L.LightningModule, output: dict, stage: str):
         pl_module.metrics[f"{stage}/loss"](output["loss"])
-        pl_module.metrics[f"{stage}/acc"](output["preds"], output["targets"])
+        mixup_on = output["preds"].ndim == 1 and output["targets"].ndim > 1
+        if not mixup_on:
+            pl_module.metrics[f"{stage}/acc"](output["preds"], output["targets"])
 
     def log_common(
         self, pl_module: L.LightningModule, output: dict, stage: str, batch_idx: int

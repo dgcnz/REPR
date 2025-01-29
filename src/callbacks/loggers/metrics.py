@@ -55,6 +55,7 @@ class MetricLogger(BaseCallback):
             pl_module.metrics["val/rmse_best"],
             sync_dist=True,
             prog_bar=True,
+            on_epoch=True,
             rank_zero_only=True,
         )
 

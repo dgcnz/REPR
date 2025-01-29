@@ -1,6 +1,7 @@
 defaults: 
 - transform@train_transform: basic_224
 - transform@test_transform: basic_224
+- mixup: null
 
 _target_: src.data.hf_datamodule.HFDataModule
 dataset_name: "ILSVRC/imagenet-1k"

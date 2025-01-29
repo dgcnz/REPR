@@ -6,11 +6,11 @@
 defaults:
   - override /data: im1k
   - override /model: classification_ft/vit_b_16_224
-  - override /callbacks:
-    - loggers/classification_ft/metric_logger
-    - lr_monitor
+  - override /callbacks: classification_ft/default
   - override /trainer: gpu
   - override /logger: wandb
+  - override /data/transform@data.train_transform: DropPos/vitb_im1k_finetune
+  - override /data/mixup: DropPos/vitb_im1k_finetune
 
 
 tags: ["classification_ft"]
