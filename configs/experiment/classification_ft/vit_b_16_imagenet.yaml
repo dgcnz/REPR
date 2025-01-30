@@ -21,6 +21,9 @@ float32_matmul_precision: "high"
 trainer:
   min_epochs: 15
   max_epochs: 50
+  limit_train_batches: 64
+  limit_val_batches: 64
+  limit_test_batches: 64
   check_val_every_n_epoch: 1
   deterministic: true
   accumulate_grad_batches: 8
@@ -30,13 +33,16 @@ trainer:
 model:
   num_classes: 1000
   optimizer:
-    lr: 2e-4
+    lr: 5e-5
+  scheduler:
+    warmup_t: 5
+  scheduler_interval: epoch
   net:
     pos_embed: 'learn'
-    drop_path: 0.1 # from droppos finetune 1k
-  
-  # scheduler:
-  #   warmup_t: 1280 # 256 * 5
+    drop_path_rate: 0.1 # from droppos finetune 1k
+    pretrained_cfg_overlay:
+      file:
+        module_ckpt_path: "artifacts/model-ukjrb3lq:v0/epoch=41-step=52584.ckpt"
 
 data:
   batch_size: 128

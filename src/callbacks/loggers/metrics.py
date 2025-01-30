@@ -39,7 +39,6 @@ class MetricLogger(BaseCallback):
                 sync_dist=True,
             )
 
-
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         self.compute_common(pl_module, outputs, "val")
         self.log_common(pl_module, outputs, "val", batch_idx)
@@ -53,6 +52,8 @@ class MetricLogger(BaseCallback):
 
     def on_validation_epoch_end(self, trainer, pl_module):
         pl_module.cli_logger.info("Validation epoch ended.")
+        # TODO: Sometimes this is called before the validation batch, I think 
+        # it's because of the sanity check.
         mse = pl_module.metrics["val/rmse"].compute()
         pl_module.metrics["val/rmse_best"](mse)
         pl_module.log(
@@ -73,62 +74,32 @@ class MetricLogger(BaseCallback):
     def log_common(
         self, pl_module: L.LightningModule, output: dict, stage: str, batch_idx: int
     ):
-        pl_module.log(
-            f"{stage}/loss",
-            pl_module.metrics[f"{stage}/loss"],
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-            sync_dist=True,
-        )
+        common_kwargs = dict(on_step=False, on_epoch=True, sync_dist=True)
         rmse_y, rmse_x = pl_module.metrics[f"{stage}/rmse"].compute()
         rmse = (rmse_y + rmse_x) / 2
         pl_module.log_dict(
             {
-                f"{stage}/rmse_y": rmse_y,
-                f"{stage}/rmse_x": rmse_x,
+                f"{stage}/loss": pl_module.metrics[f"{stage}/loss"],
                 f"{stage}/rmse": rmse,
             },
-            on_step=False,
-            on_epoch=True,
+            **common_kwargs,
             prog_bar=True,
-            sync_dist=True,
+        )
+        pl_module.log_dict(
+            {
+                f"{stage}/rmse_y": rmse_y,
+                f"{stage}/rmse_x": rmse_x,
+            },
+            prog_bar=False, # not necessary to show this
+            **common_kwargs,
         )
 
         if batch_idx == 0:
-            pl_module.log(
-                f"{stage}/transform_distribution/sample_mean",
-                output["pred_T"].mean(),
-                on_step=False,
-                on_epoch=True,
-                prog_bar=True,
-                sync_dist=True,
+            pl_module.log_dict(
+                {
+                    f"{stage}/transform_distribution/sample_mean": output["pred_T"].mean(),
+                    f"{stage}/transform_distribution/sample_std": output["pred_T"].std(),
+                },
+                prog_bar=False,
+                **common_kwargs,
             )
-            pl_module.log(
-                f"{stage}/transform_distribution/sample_std",
-                output["pred_T"].std(),
-                on_step=False,
-                on_epoch=True,
-                prog_bar=True,
-                sync_dist=True,
-            )
-            # TODO: Maybe move this to a separate callback, it throws an error:
-            # https://github.com/pytorch/pytorch/issues/64947
-            # pl_module.log(
-            #     f"{stage}/transform_distribution/sample_median",
-            #     output["pred_T"].median(),
-            #     on_step=False,
-            #     on_epoch=True,
-            #     prog_bar=True,
-            #     sync_dist=True,
-            # )
-            # pl_module.log(
-            #     f"{stage}/transform_distribution/sample_iqr",
-            #     output["pred_T"].float().quantile(0.75)
-            #     - output["pred_T"].float().quantile(0.25),
-            #     on_step=False,
-            #     on_epoch=True,
-            #     prog_bar=True,
-            #     sync_dist=True,
-            # )
-            # In the meantime log the mean and std

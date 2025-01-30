@@ -25,8 +25,8 @@ trainer:
   devices: 4
   num_nodes: 1
   sync_batchnorm: true
-  strategy:
-    _target_: src.strategies.ddp_compile.DDPCompileStrategy
+  # strategy:
+  #   _target_: src.strategies.ddp_compile.DDPCompileStrategy
 
 model:
   num_classes: 1000
