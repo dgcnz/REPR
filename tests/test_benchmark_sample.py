@@ -301,9 +301,9 @@ def benchmark_impl(
 
 
 @pytest.mark.benchmark(group="Implementation")
-@pytest.mark.parametrize("patch_size", [4])
-@pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("img_size", [32])
+@pytest.mark.parametrize("patch_size", [16])
+@pytest.mark.parametrize("batch_size", [256])
+@pytest.mark.parametrize("img_size", [256])
 def test_baseline_sampler(patch_size, batch_size, img_size, benchmark):
     benchmark.group += f"[B: {batch_size} P: {patch_size} I: {img_size}]"
 
@@ -317,8 +317,10 @@ def test_baseline_sampler(patch_size, batch_size, img_size, benchmark):
 
 
 @pytest.mark.benchmark(group="Implementation")
-@pytest.mark.parametrize("batch_size", [1, 16, 32])
-@pytest.mark.parametrize("patch_size, img_size", [(4, 32), (16, 256)])
+# @pytest.mark.parametrize("batch_size", [1, 16, 32])
+@pytest.mark.parametrize("batch_size", [256])
+# @pytest.mark.parametrize("patch_size, img_size", [(4, 32), (16, 256)])
+@pytest.mark.parametrize("patch_size, img_size", [(16, 256)])
 @pytest.mark.parametrize(
     "batch_impl",
     [
@@ -331,7 +333,8 @@ def test_baseline_sampler(patch_size, batch_size, img_size, benchmark):
         "loop_batched",
     ],
 )
-@pytest.mark.parametrize("device", ["cpu", "cuda"])
+# @pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("device", ["cuda"])
 def test_benchmark_impls(
     batch_size, patch_size, img_size, batch_impl, device, benchmark: BenchmarkFixture
 ):

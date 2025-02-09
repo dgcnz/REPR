@@ -9,10 +9,11 @@ import matplotlib.pyplot as plt
 
 
 class TransformLogger(BaseCallback):
-    def __init__(self, every_n_steps: int = -1, num_samples: int = 1):
+    def __init__(self, every_n_steps: int = -1, num_samples: int = 1, every_n_epochs: int = 1):
         super().__init__()
         self.every_n_steps = every_n_steps
         self.num_samples = num_samples
+        self.every_n_epochs = every_n_epochs
         if self.num_samples != 1:
             raise NotImplementedError("num_samples > 1 is not supported yet.")
 
@@ -20,7 +21,7 @@ class TransformLogger(BaseCallback):
     def on_stage_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, stage: str
     ):
-        if not should_log(batch_idx, self.every_n_steps):
+        if not should_log(batch_idx, self.every_n_steps, trainer.current_epoch, self.every_n_epochs):
             return
 
         c = pl_module.cache

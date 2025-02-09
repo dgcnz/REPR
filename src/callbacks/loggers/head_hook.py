@@ -6,15 +6,17 @@ from src.callbacks.base_callback import BaseCallback
 
 
 class HeadHookLogger(BaseCallback):
-    def __init__(self, every_n_steps: int = -1):
+    def __init__(self, every_n_steps: int = -1, every_n_epochs: int = 1):
         super().__init__()
         self.every_n_steps = every_n_steps
+        self.ever_n_epochs = every_n_epochs
         self.handles = []
 
         # Hook data
         self.head_input_features = None
         self.head_outputs = None
         self.model_output = None
+
 
     def _head_hook_fn(self, module, input, output):
         self.head_input_features = clean_tensor(input[0])
@@ -79,7 +81,7 @@ class HeadHookLogger(BaseCallback):
 
     @rank_zero_only
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        if not should_log(batch_idx, self.every_n_steps):
+        if not should_log(batch_idx, self.every_n_steps, trainer.current_epoch, self.every_n_epochs):
             return
         assert self.handles
         self._detach_hooks()

@@ -10,17 +10,18 @@ from src.callbacks.base_callback import BaseCallback
 
 
 class ReconstructionLogger(BaseCallback):
-    def __init__(self, every_n_steps: int = -1, num_samples: int = 1):
+    def __init__(self, every_n_steps: int = -1, num_samples: int = 1, every_n_epochs: int = 1):
         super().__init__()
         self.every_n_steps = every_n_steps
         self.num_samples = num_samples
+        self.every_n_epochs = every_n_epochs
 
     def _plot(
-        self, pl_module, x_original, x, patch_positions, pred_T, patch_pair_indices
+        self, pl_module, x_original, x, patch_positions, pred_T, patch_pair_indices, ids_nopos
     ):
         img_size: tuple[int, int] = x_original.shape[-2:]
         refpatch_id = _get_refpatch_id_batch(
-            patch_positions[: self.num_samples], img_size
+            patch_positions[: self.num_samples], img_size, ids_nopos
         )
         refpatch_id = refpatch_id.tolist()
 
@@ -48,7 +49,7 @@ class ReconstructionLogger(BaseCallback):
     def on_stage_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx, stage: str
     ):
-        if not should_log(batch_idx, self.every_n_steps):
+        if not should_log(batch_idx, self.every_n_steps, trainer.current_epoch, self.every_n_epochs):
             return
         c = pl_module.cache
         fig_rec, fig_prov = self._plot(
@@ -58,6 +59,7 @@ class ReconstructionLogger(BaseCallback):
             c.patch_positions,
             c.pred_T,
             c.patch_pair_indices,
+            c.__dict__.get("ids_nopos", None),
         )
         self.log_plots(
             {

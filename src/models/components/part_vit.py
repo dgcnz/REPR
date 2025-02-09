@@ -6,7 +6,7 @@ from jaxtyping import Float, Int
 import math
 from typing import Any
 from src.data.components.sampling_utils import sample_and_stitch
-from src.models.components.cross_attention import CrossAttention
+from src.models.components.heads.cross_attention import CrossAttention
 from src.utils.fancy_indexing import index_pairs
 
 

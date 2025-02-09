@@ -1,6 +1,5 @@
 defaults:
   - output_cache
-  - loggers/head_hook_logger
   - loggers/reconstruction_logger
   - loggers/transform_logger
 

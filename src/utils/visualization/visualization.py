@@ -564,7 +564,7 @@ if __name__ == "__main__":
         ).to(torch.int64)
         * patch_size
     )
-    from src.models.components.part_utils import compute_gt_transform
+    from src.models.components.utils.part_utils import compute_gt_transform
 
     transform = compute_gt_transform(pair_indices[None], patch_positions[None])[0]
 

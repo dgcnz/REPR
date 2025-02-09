@@ -6,7 +6,7 @@ import lightning as L
 from torchmetrics import MinMetric, MeanMetric
 from torchmetrics.regression import MeanSquaredError
 from src.data.components.sampling_utils import sample_and_stitch
-from src.models.components.part_utils import (
+from src.models.components.utils.part_utils import (
     compute_gt_transform,
     get_all_pairs,
     compute_symmetry_loss,

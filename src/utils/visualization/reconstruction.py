@@ -22,13 +22,21 @@ def get_center_refpatch_id(
 
 
 def _get_refpatch_id_batch(
-    patch_positions: Int[Tensor, "B n_patches 2"], img_size: tuple[int, int]
+    patch_positions: Int[Tensor, "B n_patches 2"], img_size: tuple[int, int], allowed_ids: Int[Tensor, "B n_blocked_ids"] = None
 ) -> Int[Tensor, "B"]:
     # Create ideal refpatch positions for all batches at once
     ideal_refpatch_yx = torch.tensor(img_size, device=patch_positions.device) // 2
     
     # Compute L1 distances in batched manner
     distances = (patch_positions - ideal_refpatch_yx.view(1, 1, 2)).abs().sum(2)
+
+    # Replace blocked ids with max value
+    if allowed_ids is not None:
+        mask = torch.ones_like(distances, dtype=torch.bool)  # create a Boolean mask of same shape
+        mask.scatter_(1, allowed_ids, False)
+        inf = img_size[0] + 100
+        distances = distances.masked_fill(mask, inf)
+
     
     # Get closest patch index for each batch
     refpatch_ids = torch.argmin(distances, dim=1)
@@ -121,7 +129,7 @@ def plot_reconstructions(
         ax[0].set_title("Original Image")
         ax[0].add_patch(copy(rect))
         ax[1].imshow(img_sampled.permute(1, 2, 0))
-        ax[1].set_title("Sampled Image")
+        ax[1].set_title("Ground Truth Image")
         ax[1].add_patch(copy(rect))
 
         ax[2].imshow(reconstructed_image.permute(1, 2, 0))

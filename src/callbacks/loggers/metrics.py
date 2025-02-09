@@ -17,27 +17,6 @@ class MetricLogger(BaseCallback):
         # update and log metrics
         self.compute_common(pl_module, outputs, "train")
         self.log_common(pl_module, outputs, "train", batch_idx)
-        # intrinsically train logs
-        if (
-            hasattr(pl_module.net, "logit_scale")
-            and pl_module.net.logit_scale_learnable
-        ):
-            pl_module.log(
-                "train/logit_scale",
-                pl_module.net.logit_scale,
-                on_step=False,
-                on_epoch=True,
-                sync_dist=True,
-            )
-        if pl_module.hparams.symmetry_penalty > 0:
-            pl_module.log(
-                "train/symmetry_loss",
-                outputs["symmetry_loss"],
-                on_step=False,
-                on_epoch=True,
-                prog_bar=True,
-                sync_dist=True,
-            )
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         self.compute_common(pl_module, outputs, "val")
