@@ -6,7 +6,10 @@
 defaults:
   - override /data: im1k
   - override /model: part_mae
-  - override /callbacks: training
+  # - override /callbacks: training
+  - override /callbacks:
+      - loggers/metric_logger
+      - lr_monitor
   - override /trainer: gpu
   - override /logger: wandb
 
