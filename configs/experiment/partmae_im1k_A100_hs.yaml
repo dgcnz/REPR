@@ -21,8 +21,8 @@ seed: 12345
 float32_matmul_precision: "high"
 
 trainer:
-  min_epochs: 10
-  max_epochs: 10
+  min_epochs: 8
+  max_epochs: 8
   check_val_every_n_epoch: 1
   deterministic: true
   devices: 4

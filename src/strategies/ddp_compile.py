@@ -6,6 +6,7 @@ import logging
 
 
 log = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 # Don't use DPP + compile unless you know what you are doing
 # https://dev-discuss.pytorch.org/t/torchdynamo-update-9-making-ddp-work-with-torchdynamo/860
@@ -24,4 +25,6 @@ class DDPCompileStrategy(DDPStrategy):
     #         return model
     def configure_ddp(self):
         super().configure_ddp()
+        log.info("Compiling model")
         self.model = torch.compile(self.model)
+        log.info("Model compiled")
