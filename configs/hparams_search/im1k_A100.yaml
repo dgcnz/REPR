@@ -24,7 +24,7 @@ hydra:
     storage: null
 
     # name of the study to persist optimization results
-    study_name: overfit_im1k
+    study_name: hs_im1k
 
     # number of parallel workers
     n_jobs: 1
@@ -46,5 +46,5 @@ hydra:
     # define hyperparameter search space
     params:
       model.optimizer.lr: interval(0.00001, 0.001)
-      # hsearch for 5 epochs, to 10 epochs, which is 1280 to 2560 steps
-      model.scheduler.warmup_t: int(interval(1280, 2560))
+      # hsearch for 5 epochs, to 10 epochs
+      model.scheduler.warmup_t: int(interval(5, 10))

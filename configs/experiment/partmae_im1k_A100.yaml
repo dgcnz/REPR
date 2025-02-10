@@ -4,56 +4,53 @@
 # python train.py experiment=example
 
 defaults:
-  - /debug/overfit
   - override /data: im1k
   - override /model: part_mae
   - override /callbacks: training
-  - override /trainer: gpu
+  - override /trainer: ddp
   - override /logger: wandb
-  
 
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-tags: ["part", "overfit"]
+tags: ["part", "mae", "a100", "snellius"]
 
 seed: 12345
 float32_matmul_precision: "high"
 
-callbacks:
-  reconstruction_logger:
-    every_n_epochs: 50
-  transform_logger:
-    every_n_epochs: 50
-  output_cache:
-    every_n_epochs: 50
-
 trainer:
-  min_epochs: 400
-  max_epochs: 1000
-  limit_val_batches: 0
-  limit_test_batches: 0
-  check_val_every_n_epoch: 50
+  min_epochs: 15
+  max_epochs: 200
+  check_val_every_n_epoch: 1
   deterministic: true
+  devices: 4
+  num_nodes: 1
+  sync_batchnorm: true
+
+  strategy:
+    _target_: src.strategies.ddp_compile.DDPCompileStrategy
+
 
 model:
   net:
-    img_size: 224
-    mask_ratio: 0.5
-    pos_mask_ratio: 0.9
-
+    backbone:
+      img_size: 224
+      patch_size: 16
+  sample_mode: offgrid
 
   optimizer:
     lr: 1e-4
   scheduler:
-    warmup_t: 150
+    warmup_t: 5 
+  scheduler_interval: epoch
 
 
 data:
-  batch_size: 2
-  num_workers: 0
+  batch_size: 1024
+  num_workers: 16
+  cache_dir: /scratch-shared/dcanez/HF_HOME
 
 
 logger:
   wandb:
-    group: overfit_part_mae
+    group: part_mae_im1k_A100
