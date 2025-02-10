@@ -231,9 +231,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         )
 
         # append mask tokens to position embeddings
-        mask_pos_length = (
-            mask_pos.sum().item()
-        )  # TODO: directly compute this with formula
+        mask_pos_length = math.ceil(math.floor(N * (1 - mask_ratio)) * pos_mask_ratio)
         mask_pos_tokens = self.mask_pos_token.repeat(B, mask_pos_length, 1)
         pos_embed = torch.cat([pos_embed, mask_pos_tokens], dim=1)
 
