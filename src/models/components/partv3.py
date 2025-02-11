@@ -203,6 +203,35 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         mask = torch.gather(mask, dim=1, index=ids_restore).bool()
 
         return ids_keep, mask, ids_restore, ids_remove
+    
+    def _pos_embed(self, x: torch.Tensor) -> torch.Tensor:
+        if self.pos_embed is None:
+            return x.view(x.shape[0], -1, x.shape[-1])
+
+        pos_embed = self.pos_embed
+
+        to_cat = []
+        if self.cls_token is not None:
+            to_cat.append(self.cls_token.expand(x.shape[0], -1, -1))
+
+        # original timm, JAX, and deit vit impl
+        # pos_embed has entry for class token, concat then add
+        if to_cat:
+            x = torch.cat(to_cat + [x], dim=1)
+        x = x + pos_embed
+        return x
+    
+    def forward_features(self, x: Float[Tensor, "B C H W"]) -> Float[Tensor, "B N D"]:
+        B, C, H, W = x.shape
+        x = self.patch_embed(x)
+        x = self._pos_embed(x)
+        # x = self.patch_drop(x)
+        # x = self.norm_pre(x)
+        x = self.blocks(x)
+        x = self.norm(x)
+        return x
+
+
 
     def forward_encoder(
         self, x: Float[Tensor, "B C H W"], mask_ratio: float, pos_mask_ratio: float

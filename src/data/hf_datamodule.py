@@ -56,6 +56,7 @@ def to_hf_transform(transform: Callable) -> Callable:
 
     return _transform
 
+
 def hf_mixup_fn(mixup_fn: Callable) -> Callable:
     @functools.wraps(mixup_fn)
     def _mixup_fn(batch: list[dict]):
@@ -64,6 +65,7 @@ def hf_mixup_fn(mixup_fn: Callable) -> Callable:
         batch = mixup_fn(batch[IMG_KEY], batch[LABEL_KEY])
         # reverts to dict
         return {IMG_KEY: batch[0], LABEL_KEY: batch[1]}
+
     return _mixup_fn
 
 
@@ -81,7 +83,7 @@ class HFDataModule(LightningDataModule):
         val_fraction: float = None,  # split train into train/val
         test_fraction: float = None,  # split val into val/test
         mixup: FastCollateMixup | None = None,
-        cache_dir: str | None = None,
+        **load_dataset_kwargs,  # cache_dir, name, etc
     ) -> None:
         """Initialize a `HFDataModule`.
 
@@ -98,6 +100,7 @@ class HFDataModule(LightningDataModule):
         self.dataset_name = dataset_name
         self.img_key = img_key
         self.label_key = label_key
+        self.load_dataset_kwargs = load_dataset_kwargs
         self.data_train: Optional[Dataset] = None
         self.data_val: Optional[Dataset] = None
         self.data_test: Optional[Dataset] = None
@@ -125,7 +128,7 @@ class HFDataModule(LightningDataModule):
                 "huggingface-cli download ILSVRC/imagenet-1k --repo-type dataset"
             )
 
-        _ = load_dataset(self.hparams.dataset_name, cache_dir=self.hparams.cache_dir)
+        _ = load_dataset(self.hparams.dataset_name, **self.load_dataset_kwargs)
 
     def setup(self, stage: Optional[str] = None) -> None:
         """Load data. Set variables: `self.data_train`, `self.data_val`, `self.data_test`.
@@ -151,7 +154,7 @@ class HFDataModule(LightningDataModule):
         if not self.data_train and not self.data_val and not self.data_test:
             self.cli_logger.info("Loading datasets.")
             ds = load_dataset(
-                self.dataset_name, cache_dir=self.hparams.cache_dir
+                self.dataset_name, **self.load_dataset_kwargs
             ).with_format("torch")
 
             # rename dataset keys to the standard "image" and "label"
@@ -187,13 +190,17 @@ class HFDataModule(LightningDataModule):
             if self.hparams.test_fraction is None:
                 self.data_test = ds["test"]
             else:
-                self.cli_logger.info("Splitting validation set into validation and test sets.")
+                self.cli_logger.info(
+                    "Splitting validation set into validation and test sets."
+                )
                 splits = self.data_val.train_test_split(
                     test_size=self.hparams.test_fraction, shuffle=False
                 )
                 self.data_val = splits["train"]
                 self.data_test = splits["test"]
-                self.cli_logger.info(f"Finished splitting validation set into validation and test sets.")
+                self.cli_logger.info(
+                    f"Finished splitting validation set into validation and test sets."
+                )
 
             self.data_train.set_transform(to_hf_transform(self.train_transform))
             self.data_val.set_transform(to_hf_transform(self.train_transform))
@@ -216,6 +223,7 @@ class HFDataModule(LightningDataModule):
             pin_memory=self.hparams.pin_memory,
             shuffle=True,
             collate_fn=collate_fn,
+            drop_last=True,
         )
 
     def val_dataloader(self) -> DataLoader[Any]:

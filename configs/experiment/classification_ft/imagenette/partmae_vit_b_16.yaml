@@ -1,0 +1,58 @@
+# @package _global_
+
+# to execute this experiment run:
+# python train.py experiment=example
+
+defaults:
+  # - override /data: im1k
+  - override /data: imagenette
+  - override /model: classification_ft/vit_b_16_224
+  - override /callbacks: classification_ft/default
+  - override /trainer: gpu
+  - override /logger: wandb
+  - override /data/transform@data.train_transform: DropPos/vitb_im1k_finetune
+  - override /data/mixup: DropPos/vitb_im1k_finetune
+
+
+tags: ["classification_ft", "imagenette", "partmae", "local"]
+
+seed: 12345
+float32_matmul_precision: "high"
+
+trainer:
+  min_epochs: 15
+  max_epochs: 50
+  # limit_train_batches: 64
+  # limit_val_batches: 64
+  # limit_test_batches: 64
+  check_val_every_n_epoch: 1
+  deterministic: true
+  accumulate_grad_batches: 8
+  strategy:
+    _target_: src.strategies.compile.CompileStrategy
+
+model:
+  num_classes: 1000
+  optimizer:
+    lr: 5e-5
+    weight_decay: 0.02
+  scheduler:
+    warmup_t: 5
+  scheduler_interval: epoch
+  net:
+    pos_embed: 'learn'
+    class_token: True,
+    drop_path_rate: 0.1 # from droppos finetune 1k
+    pretrained_cfg_overlay:
+      file: "artifacts/model-2knf0d16:v0/backbone.ckpt"
+
+data:
+  batch_size: 128
+  num_workers: 8
+  test_fraction: 0.2
+
+logger:
+  wandb:
+    project: "PARTv2-classification-ft"
+    group: "vit_b_16_imagenetette"
+

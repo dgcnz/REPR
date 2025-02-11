@@ -12,7 +12,7 @@ net:
   num_classes: ${model.num_classes}
   global_pool: "avg"
   class_token: False
-  pos_embed: "none"
+  pos_embed: "learn"
   embed_dim: 768
   img_size: 224
   patch_size: 16
