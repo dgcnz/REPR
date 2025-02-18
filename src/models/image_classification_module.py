@@ -6,6 +6,7 @@ import lightning as L
 from torchmetrics import MaxMetric, MeanMetric, Accuracy
 from src.utils import pylogger
 from jaxtyping import Float, Int
+from functools import partial
 
 
 class ImageClassificationModule(L.LightningModule):
@@ -56,7 +57,7 @@ class ImageClassificationModule(L.LightningModule):
 
         :return: A dictionary containing the loss and other metrics.
         """
-        xid, yid = (0, 1) if isinstance(batch, tuple) else ("image", "label")
+        xid, yid = (0, 1) if isinstance(batch, (tuple, list)) else ("image", "label")
         x, y = batch[xid], batch[yid]
 
         logits = self.forward(x)
@@ -85,6 +86,8 @@ class ImageClassificationModule(L.LightningModule):
         return self.model_step(batch)
 
     def configure_optimizers(self) -> dict[str, Any]:
+        if hasattr(self.hparams, "lr"):
+            self.hparams.optimizer = partial(self.hparams.optimizer, lr=self.hparams.lr)
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
         if self.hparams.scheduler is not None:
             scheduler = self.hparams.scheduler(optimizer=optimizer)

@@ -166,3 +166,5 @@ logs
 requirements.txt
 artifacts
 .aim
+third-party/DropPos/log_dir
+third-party/DropPos/output_dir

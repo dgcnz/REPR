@@ -57,6 +57,19 @@ def to_hf_transform(transform: Callable) -> Callable:
     return _transform
 
 
+def collate_factory(output_tuple: bool = False, mixup_fn: Callable = None) -> Callable:
+    def _collate_fn(batch: list[dict]) -> Any:
+        batch = torch.utils.data._utils.collate.default_collate(batch)
+        if mixup_fn is not None:
+            batch = mixup_fn(batch[IMG_KEY], batch[LABEL_KEY])
+            batch = {IMG_KEY: batch[0], LABEL_KEY: batch[1]}
+        return batch[IMG_KEY], batch[LABEL_KEY] if output_tuple else batch
+        
+
+    return _collate_fn
+
+
+
 def hf_mixup_fn(mixup_fn: Callable) -> Callable:
     @functools.wraps(mixup_fn)
     def _mixup_fn(batch: list[dict]):
@@ -83,6 +96,7 @@ class HFDataModule(LightningDataModule):
         val_fraction: float = None,  # split train into train/val
         test_fraction: float = None,  # split val into val/test
         mixup: FastCollateMixup | None = None,
+        output_tuple: bool = False,
         **load_dataset_kwargs,  # cache_dir, name, etc
     ) -> None:
         """Initialize a `HFDataModule`.
@@ -212,10 +226,9 @@ class HFDataModule(LightningDataModule):
 
         :return: The train dataloader.
         """
-        collate_fn = None
-        if self.hparams.mixup is not None:
-            self.cli_logger.info("Using Mixup.")
-            collate_fn = hf_mixup_fn(self.hparams.mixup)
+        collate_fn = collate_factory(
+            output_tuple=self.hparams.output_tuple, mixup_fn=self.hparams.mixup
+        )
         return DataLoader(
             dataset=self.data_train,
             batch_size=self.batch_size_per_device,
@@ -231,12 +244,16 @@ class HFDataModule(LightningDataModule):
 
         :return: The validation dataloader.
         """
+        collate_fn = collate_factory(
+            output_tuple=self.hparams.output_tuple
+        )
         return DataLoader(
             dataset=self.data_val,
             batch_size=self.batch_size_per_device,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
             shuffle=False,
+            collate_fn=collate_fn,
         )
 
     def test_dataloader(self) -> DataLoader[Any]:
@@ -244,12 +261,16 @@ class HFDataModule(LightningDataModule):
 
         :return: The test dataloader.
         """
+        collate_fn = collate_factory(
+            output_tuple=self.hparams.output_tuple
+        )
         return DataLoader(
             dataset=self.data_test,
             batch_size=self.batch_size_per_device,
             num_workers=self.hparams.num_workers,
             pin_memory=self.hparams.pin_memory,
             shuffle=False,
+            collate_fn=collate_fn,
         )
 
 

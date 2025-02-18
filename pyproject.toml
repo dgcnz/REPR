@@ -59,6 +59,9 @@ pandas = "^2.2.3"
 yacs = "^0.1.8"
 scikit-learn = "^1.6.1"
 vit-prisma = {git = "https://github.com/dgcnz/ViT-Prisma"}
+pytorch-ignite = "^0.5.1"
+torch-lr-finder = "^0.2.2"
+onnxscript = "^0.2.0"
 
 [build-system]
 requires = ["poetry-core"]
