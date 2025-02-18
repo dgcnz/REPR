@@ -15,6 +15,7 @@ import os
 import time
 from pathlib import Path
 import builtins
+import wandb
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -163,11 +164,27 @@ def get_args_parser():
     parser.add_argument('--dist_url', default='env://',
                         help='url used to set up distributed training')
 
+    # Add wandb arguments
+    parser.add_argument('--wandb_project', default='droppos', type=str,
+                        help='wandb project name')
+    parser.add_argument('--wandb_entity', default=None, type=str,
+                        help='wandb entity name')
+    parser.add_argument('--no_wandb', action='store_true',
+                        help='disable wandb logging')
+
     return parser
 
 
 def main(args):
     misc.init_distributed_mode(args)
+
+    # Initialize wandb only for the main process in distributed training
+    if misc.is_main_process() and not args.no_wandb:
+        wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            settings=wandb.Settings(start_method="fork")
+        )
 
     print('job dir: {}'.format(os.path.dirname(os.path.realpath(__file__))))
     print("{}".format(args).replace(', ', ',\n'))
@@ -377,6 +394,18 @@ def main(args):
         max_accuracy = max(max_accuracy, test_stats["acc1"])
         print(f'Max accuracy: {max_accuracy:.2f}%')
 
+        # Add wandb logging
+        if misc.is_main_process() and not args.no_wandb:
+            wandb.log({
+                'epoch': epoch,
+                'train/loss': train_stats['loss'],
+                'train/lr': train_stats['lr'],
+                'val/loss': test_stats['loss'],
+                'val/acc1': test_stats['acc1'],
+                'val/acc5': test_stats['acc5'],
+                'max_accuracy': max_accuracy,
+            }, step=epoch)
+
         if log_writer is not None:
             log_writer.add_scalar('perf/test_acc1', test_stats['acc1'], epoch)
             log_writer.add_scalar('perf/test_acc5', test_stats['acc5'], epoch)
@@ -402,6 +431,10 @@ def main(args):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
+
+    # Close wandb
+    if misc.is_main_process() and not args.no_wandb:
+        wandb.finish()
 
 
 if __name__ == '__main__':
