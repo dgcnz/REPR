@@ -4,7 +4,7 @@
 # python train.py experiment=example
 
 defaults:
-  - classification_ft/imagenet1k/vit_b_16/partmae/_base
+  - classification_ft/imagenet1k/partmae/vit_b_16/_base
   - override /trainer: ddp
 
 trainer:
