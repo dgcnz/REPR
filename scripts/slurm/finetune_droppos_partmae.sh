@@ -26,7 +26,7 @@ export TORCH_LOGS=dynamo
 export PYTHONFAULTHANDLER=1
 
 cd third-party/DropPos/
-srun python -m torch.distributed.launch --nproc-per-node=4 --nnodes 1  main_finetune.py --batch_size 256 --accum_iter 1 --model vit_base_patch16 --finetune ../../artifacts/model-2knf0d16:v0/backbone.ckpt --epochs 100 --warmup_epochs 5 --blr 1e-3 --layer_decay 0.75 --weight_decay 0.05 --drop_path 0.1 --reprob 0.25 --mixup 0.8 --cutmix 1.0 --dist_eval --data_path hf+ILSVRC/imagenet-1k++/scratch-shared/dcanez/HF_HOME  --nb_classes 1000 --output_dir ./output_dir --log_dir ./log_dir --experiment finetune_partmae_in1k
+srun python -m torch.distributed.launch --nproc-per-node=4 --nnodes 1 --rdzv_backend c10d --master_port 0 main_finetune.py --batch_size 256 --accum_iter 1 --model vit_base_patch16 --finetune ../../artifacts/model-2knf0d16:v0/backbone.ckpt --epochs 100 --warmup_epochs 5 --blr 1e-3 --layer_decay 0.75 --weight_decay 0.05 --drop_path 0.1 --reprob 0.25 --mixup 0.8 --cutmix 1.0 --dist_eval --data_path hf+ILSVRC/imagenet-1k++/scratch-shared/dcanez/HF_HOME  --nb_classes 1000 --output_dir ./output_dir --log_dir ./log_dir --experiment finetune_partmae_in1k
 
 
 # srun python -m torch.distributed.run --nproc-per-node=4 --nnodes 1 --rdzv_backend c10d --master_port 0  main_finetune.py --batch_size 128 --accum_iter 8 --model vit_base_patch16 --finetune ../../artifacts/model-2knf0d16:v0/backbone.ckpt --epochs 100 --warmup_epochs 5 --blr 1e-3 --layer_decay 0.75 --weight_decay 0.05 --drop_path 0.1 --reprob 0.25 --mixup 0.8 --cutmix 1.0 --dist_eval --data_path hf+ILSVRC/imagenet-1k  --nb_classes 1000 --output_dir ./output_dir --log_dir ./log_dir --experiment finetune_partmae_in1k
