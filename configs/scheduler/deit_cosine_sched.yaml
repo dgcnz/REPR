@@ -1,7 +1,7 @@
 _target_: timm.scheduler.CosineLRScheduler
 _partial_: true
 # t_initial=num_epochs,
-t_initial: ${trainer.max_epochs}
+t_initial: ???
 # t_mul=getattr(args, 'lr_cycle_mul', 1.),
 cycle_mul: 1.0
 # lr_min=args.min_lr,

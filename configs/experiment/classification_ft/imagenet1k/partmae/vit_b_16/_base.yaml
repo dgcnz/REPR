@@ -12,53 +12,40 @@ defaults:
   - override /data/transform@data.train_transform: DropPos/vitb_im1k_finetune
   - override /data/mixup: DropPos/vitb_im1k_finetune
 
-
-tags: ["classification_ft", "imagenet1k", "partmae", "local"]
+tags: ["classification_ft", "imagenet1k", "partmae", "vit_b_16"]
 
 seed: 12345
 float32_matmul_precision: "high"
 
-callbacks:
-  model_checkpoint:
-    monitor: val/acc
-    mode: max
-    save_top_k: 1
-    save_last: True
-    every_n_epochs: 20
-
 trainer:
-  min_epochs: 15
-  max_epochs: 50
-  limit_train_batches: 64
-  limit_val_batches: 64
-  limit_test_batches: 64
+  min_epochs: ???
+  max_epochs: ???
   check_val_every_n_epoch: 1
   deterministic: true
-  accumulate_grad_batches: 8
-  strategy:
-    _target_: src.strategies.compile.CompileStrategy
 
 model:
   num_classes: 1000
-  optimizer:
-    lr: 5e-5
-  scheduler:
-    warmup_t: 5
-  scheduler_interval: epoch
   net:
     pos_embed: 'learn'
     class_token: True
     drop_path_rate: 0.1 # from droppos finetune 1k
     pretrained_cfg_overlay:
-      file: "artifacts/model-2knf0d16:v0/backbone.ckpt"
+      file: ???
+  scheduler_interval: epoch
+  scheduler:
+    t_initial: 100 # finetune for 100 epochs
+  optimizer:
+    weight_decay: 0.02
 
 data:
-  batch_size: 128
-  num_workers: 8
+  batch_size: ???
+  num_workers: ???
   test_fraction: 0.2
+  mixup:
+    num_classes: 1000
 
 logger:
   wandb:
-    project: "PARTMAE-classification-ft-imagenet1k"
-
+    project: "PARTv2-classification-ft"
+    group: "imagenet1k/partmae/vit_b_16"
 

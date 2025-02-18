@@ -1,0 +1,26 @@
+# @package _global_
+
+# to execute this experiment run:
+# python train.py experiment=example
+
+defaults:
+  - classification_ft/imagenette/partmae/vit_b_16/_base
+  - override /trainer: gpu
+
+trainer:
+  min_epochs: 10
+  max_epochs: 10
+  check_val_every_n_epoch: 1
+  deterministic: true
+  accumulate_grad_batches: 8
+  # strategy:
+  #   _target_: src.strategies.compile.CompileStrategy
+
+model:
+  net:
+    pretrained_cfg_overlay:
+      file: "artifacts/model-2knf0d16:v0/backbone.ckpt"
+
+data:
+  batch_size: 128
+  num_workers: 8

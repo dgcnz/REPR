@@ -4,27 +4,13 @@
 # python train.py experiment=example
 
 defaults:
-  - override /data: im1k
-  - override /model: classification_ft/vit_b_16_224
-  - override /callbacks: classification_ft/default
-  - override /trainer: ddp
-  - override /logger: wandb
-  - override /data/transform@data.train_transform: DropPos/vitb_im1k_finetune
-  - override /data/mixup: DropPos/vitb_im1k_finetune
+  - classification_ft/imagenet1k/vit_b_16/partmae/_base
 
 tags: ["classification_ft", "imagenet1k", "partmae", "a100"]
 
 seed: 12345
 float32_matmul_precision: "high"
 
-
-callbacks:
-  model_checkpoint:
-    monitor: val/acc
-    mode: max
-    save_top_k: 1
-    save_last: True
-    every_n_epochs: 20
 
 trainer:
   min_epochs: 15
@@ -36,16 +22,7 @@ trainer:
   sync_batchnorm: true
 
 model:
-  num_classes: 1000
-  optimizer:
-    lr: 5e-5
-  scheduler:
-    warmup_t: 5
-  scheduler_interval: epoch
   net:
-    pos_embed: 'learn'
-    class_token: True
-    drop_path_rate: 0.1 # from droppos finetune 1k
     pretrained_cfg_overlay:
       file: "artifacts/model-2knf0d16:v0/backbone.ckpt"
 
