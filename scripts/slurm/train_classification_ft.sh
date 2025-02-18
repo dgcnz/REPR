@@ -19,7 +19,7 @@ source .venv/bin/activate
 export TORCH_LOGS=dynamo
 export PYTHONFAULTHANDLER=1
 
-srun python -m src.train experiment=classification_ft/vit_b_16_imagenet_A100
+srun python -m src.train experiment=classification_ft/imagenet1k/partmae/vit_b_16/a100
 
 deactivate
 module unload CUDA/12.6.0

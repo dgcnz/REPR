@@ -44,6 +44,7 @@ class ImageClassificationModule(L.LightningModule):
         )
         self.cli_logger = pylogger.RankedLogger(__name__, rank_zero_only=True)
         self.cache = SimpleNamespace()
+        self.lr = None # only used for LearningRateFinder
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
@@ -86,8 +87,6 @@ class ImageClassificationModule(L.LightningModule):
         return self.model_step(batch)
 
     def configure_optimizers(self) -> dict[str, Any]:
-        if hasattr(self.hparams, "lr"):
-            self.hparams.optimizer = partial(self.hparams.optimizer, lr=self.hparams.lr)
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
         if self.hparams.scheduler is not None:
             scheduler = self.hparams.scheduler(optimizer=optimizer)
@@ -104,3 +103,10 @@ class ImageClassificationModule(L.LightningModule):
 
     def lr_scheduler_step(self, scheduler, metric):
         scheduler.step(epoch=self.current_epoch)
+
+    def on_fit_start(self):
+        if self.lr:
+            # Overwrite learning rate after running LearningRateFinder
+            for optimizer in self.trainer.optimizers:
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = self.lr

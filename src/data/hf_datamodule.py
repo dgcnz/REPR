@@ -63,23 +63,14 @@ def collate_factory(output_tuple: bool = False, mixup_fn: Callable = None) -> Ca
         if mixup_fn is not None:
             batch = mixup_fn(batch[IMG_KEY], batch[LABEL_KEY])
             batch = {IMG_KEY: batch[0], LABEL_KEY: batch[1]}
-        return batch[IMG_KEY], batch[LABEL_KEY] if output_tuple else batch
+        if output_tuple:
+            return batch[IMG_KEY], batch[LABEL_KEY]
+        return batch
         
 
     return _collate_fn
 
 
-
-def hf_mixup_fn(mixup_fn: Callable) -> Callable:
-    @functools.wraps(mixup_fn)
-    def _mixup_fn(batch: list[dict]):
-        batch = torch.utils.data._utils.collate.default_collate(batch)
-        # default collate
-        batch = mixup_fn(batch[IMG_KEY], batch[LABEL_KEY])
-        # reverts to dict
-        return {IMG_KEY: batch[0], LABEL_KEY: batch[1]}
-
-    return _mixup_fn
 
 
 class HFDataModule(LightningDataModule):

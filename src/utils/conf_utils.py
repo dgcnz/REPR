@@ -49,12 +49,13 @@ def get_model_and_data_modules_from_config(
     return model, datamodule
 
 
-def get_cfg(overrides: list[str] = []) -> DictConfig:
+def get_cfg(overrides: list[str] = [], config_name: str = "train.yaml") -> DictConfig:
     OmegaConf.register_new_resolver("eval", eval, replace=True)
     with hydra.initialize(version_base=None, config_path="../../configs"):
         cfg = hydra.compose(
-            config_name="train.yaml",
+            config_name=config_name,
             overrides=overrides,
+            return_hydra_config=True,
         )
         return cfg
 
