@@ -62,6 +62,7 @@ vit-prisma = {git = "https://github.com/dgcnz/ViT-Prisma"}
 pytorch-ignite = "^0.5.1"
 torch-lr-finder = "^0.2.2"
 onnxscript = "^0.2.0"
+opencv-python = "^4.11.0.86"
 
 [build-system]
 requires = ["poetry-core"]
