@@ -20,7 +20,7 @@ from src.models.components.utils.part_utils import (
 )
 from torch.nn.functional import mse_loss, l1_loss
 from timm.models.vision_transformer import PatchEmbed, Block
-from src.models.components.utils.patch_embed import OffGridPatchEmbed
+from src.models.components.utils.patch_embed import OffGridPatchEmbed, random_sampling, stratified_jittered_sampling, ongrid_sampling
 from src.models.components.utils.offgrid_pos_embed import (
     get_2d_sincos_pos_embed,
     get_canonical_pos_embed,
@@ -73,6 +73,9 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         decoder_depth: int = 8,
         decoder_num_heads: int = 16,
         num_targets: int = 2,
+        # PART params
+        sampler: str = "random",
+        criterion: str = "l1"
     ):
         super().__init__()
 
@@ -83,13 +86,27 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.mask_ratio = mask_ratio
         self.pos_mask_ratio = pos_mask_ratio
         self.num_targets = num_targets
+
+        samplers = {
+            "random": random_sampling,
+            "stratified_jittered": stratified_jittered_sampling,
+            "ongrid": ongrid_sampling,
+        }
+        
         self.patch_embed = OffGridPatchEmbed(
             img_size=img_size,
             patch_size=patch_size,
             in_chans=in_chans,
             embed_dim=embed_dim,
             mask_ratio=mask_ratio,
+            sampler=samplers[sampler],
         )
+
+        criterions = {
+            "l1": l1_loss,
+            "mse": mse_loss
+        }
+        self.criterion = criterions[criterion]
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         num_patches = (img_size // patch_size) ** 2
@@ -132,6 +149,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
 
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, num_targets, bias=False)
+        self.tanh = nn.Tanh()
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -149,7 +167,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # initialize nn.Linear and nn.LayerNorm
         self.apply(self._init_weights)
         # initialize decoder to avoid tanh saturation
-        torch.nn.init.kaiming_uniform_(self.decoder_pred.weight, a=2)
+        torch.nn.init.kaiming_uniform_(self.decoder_pred.weight, a=4)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -266,7 +284,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # compute pairwise differences
         x: Float[Tensor, "B N_nopos N_nopos C"] = x.unsqueeze(2) - x.unsqueeze(1)
         x: Float[Tensor, "B N_nopos**2 C"] = x.flatten(1, 2)
-        x = x.tanh() * img_size
+        x = self.tanh(x) * img_size
         return {"pred_T": x}
 
     def forward_loss(
@@ -288,7 +306,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             ids=ids_remove_pos
         )
         gt_T = compute_gt_transform(patch_pair_indices, patch_positions_vis)
-        loss = mse_loss(pred_T / img_size, gt_T / img_size)
+        loss = self.criterion(pred_T / img_size, gt_T / img_size)
         return {
             "loss": loss,
             "patch_pair_indices": patch_pair_indices,

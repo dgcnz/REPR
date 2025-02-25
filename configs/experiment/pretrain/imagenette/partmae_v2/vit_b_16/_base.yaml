@@ -1,0 +1,52 @@
+# @package _global_
+
+# to execute this experiment run:
+# python train.py experiment=example
+
+defaults:
+  - override /data: imagenette
+  - override /model: pretrain/partmae_v2/vit_b_16_224
+  - override /callbacks: pretrain/default
+  - override /trainer: gpu
+  - override /logger: wandb
+
+# all parameters below will be merged with parameters from default configurations set above
+# this allows you to overwrite only specified parameters
+
+tags: ["pretrain", "imagenette", "partmae_v2", "vit_b_16"]
+
+seed: 12345
+float32_matmul_precision: "high"
+
+trainer:
+  min_epochs: ???
+  max_epochs: ???
+  check_val_every_n_epoch: 1
+  deterministic: true
+
+model:
+  net:
+    img_size: 224
+    mask_ratio: 0.75
+    pos_mask_ratio: 0.75
+    sampler: random
+    criterion: l1
+
+  scheduler_interval: epoch 
+  scheduler:
+    warmup_t: ??? 
+    t_initial: 20
+
+  optimizer:
+    weight_decay: 0.05
+
+data:
+  batch_size: ???
+  num_workers: ???
+  test_fraction: 0.2
+
+
+logger:
+  wandb:
+    project: "PARTv2-pretrain"
+    group: "imagenette/partmae_v2/vit_b_16"

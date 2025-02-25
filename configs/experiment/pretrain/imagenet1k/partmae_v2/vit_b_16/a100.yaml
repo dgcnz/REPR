@@ -1,0 +1,32 @@
+# @package _global_
+
+# to execute this experiment run:
+# python train.py experiment=example
+
+defaults:
+  - pretrain/imagenet1k/partmae_v2/vit_b_16/_base
+  - override /trainer: ddp
+
+trainer:
+  min_epochs: 100
+  max_epochs: 100
+  check_val_every_n_epoch: 1
+  deterministic: true
+  devices: 4
+  num_nodes: 1
+  sync_batchnorm: true
+
+model:
+  optimizer:
+    lr: 1.2e-3
+  scheduler:
+    warmup_t: 10
+  net:
+    sampler: stratified_jittered
+    criterion: l1
+
+data:
+  batch_size: 2048
+  num_workers: 16
+  cache_dir: /scratch-shared/dcanez/HF_HOME
+

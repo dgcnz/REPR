@@ -10,7 +10,7 @@ lr_min: 1e-5
 # decay_rate: 0.1
 cycle_decay: 0.1
 # warmup_lr_init=args.warmup_lr,
-warmup_lr_init: 1e-6
+warmup_lr_init: 1e-5
 # warmup_t=args.warmup_epochs,
 warmup_t: 5
 # cycle_limit=getattr(args, 'lr_cycle_limit', 1),

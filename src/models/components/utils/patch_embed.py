@@ -6,7 +6,7 @@ from typing import Union, Tuple
 from torch.nn.modules.utils import _pair
 
 
-def stratified_jittered_sampling(
+def stratified_jittered_sampling_same(
     B: int,
     H: int,
     W: int,
@@ -75,6 +75,133 @@ def stratified_jittered_sampling(
     return ys_sampled, xs_sampled
 
 
+def stratified_jittered_sampling(
+    B: int,
+    H: int,
+    W: int,
+    patch_size: int,
+    N_vis: int,
+    device: torch.device,
+) -> tuple[Tensor, Tensor]:
+    """
+    Generate stratified jittered patch positions independently for each batch item.
+
+    For each batch item, we:
+      1. Divide the valid region ([0, H - patch_size] x [0, W - patch_size]) into a grid.
+      2. Add random jitter to the grid cell centers.
+      3. Flatten the candidate grid to get a list of candidate coordinates.
+      4. For each batch item, select N_vis indices from its candidate grid.
+
+    This yields a tensor of y coordinates and a tensor of x coordinates of shape [B, N_vis]
+    with different values for each batch item.
+    """
+    valid_H = H - patch_size  # maximum valid top-left y
+    valid_W = W - patch_size  # maximum valid top-left x
+
+    # Determine grid dimensions such that grid_rows * grid_cols >= N_vis.
+    grid_rows = int(math.floor(math.sqrt(N_vis)))
+    grid_cols = int(math.ceil(N_vis / grid_rows))
+    cell_h = valid_H / grid_rows
+    cell_w = valid_W / grid_cols
+
+    # Create a candidate grid per batch.
+    # row_idx: shape [B, grid_rows, grid_cols]
+    row_idx = (
+        torch.arange(grid_rows, device=device)
+        .float()
+        .unsqueeze(0)
+        .unsqueeze(2)
+        .expand(B, -1, grid_cols)
+    )
+    # col_idx: shape [B, grid_rows, grid_cols]
+    col_idx = (
+        torch.arange(grid_cols, device=device)
+        .float()
+        .unsqueeze(0)
+        .unsqueeze(1)
+        .expand(B, grid_rows, -1)
+    )
+
+    # Generate random jitter for each batch independently.
+    rand_y = torch.rand(B, grid_rows, grid_cols, device=device)
+    rand_x = torch.rand(B, grid_rows, grid_cols, device=device)
+
+    # Compute jittered candidate coordinates.
+    ys_grid = (row_idx + rand_y) * cell_h
+    xs_grid = (col_idx + rand_x) * cell_w
+
+    # Clamp to valid range.
+    ys_grid = torch.clamp(ys_grid, max=valid_H)
+    xs_grid = torch.clamp(xs_grid, max=valid_W)
+
+    # Flatten candidate grid per batch: shape [B, total_candidates]
+    ys_flat = ys_grid.reshape(B, -1)
+    xs_flat = xs_grid.reshape(B, -1)
+    total_candidates = ys_flat.size(1)  # equals grid_rows * grid_cols
+
+    # For each batch element, randomly select N_vis candidate indices.
+    # Generate random scores per batch and sort.
+    random_scores = torch.rand(B, total_candidates, device=device)
+    sorted_indices = random_scores.argsort(dim=1)
+    # Select the first N_vis indices for each batch.
+    sel_indices = sorted_indices[:, :N_vis]
+
+    # Gather the coordinates for each batch element.
+    ys_sampled = torch.gather(ys_flat, 1, sel_indices).long()
+    xs_sampled = torch.gather(xs_flat, 1, sel_indices).long()
+    return ys_sampled, xs_sampled
+
+
+def ongrid_sampling(
+    B: int,
+    H: int,
+    W: int,
+    patch_size: int,
+    N_vis: int,
+    device: torch.device,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Generate on-grid patch positions independently for each batch element.
+
+    The function computes a full grid of top-left coordinates for patches,
+    then for each batch element, it generates random scores for each candidate and
+    selects the top N_vis indices. This yields tensors of shape [B, N_vis] with
+    different coordinates for each batch element.
+
+    Args:
+        B: Batch size.
+        H, W: Image dimensions.
+        patch_size: Patch size (assumed square).
+        N_vis: Number of visible patches to sample.
+        device: Torch device.
+
+    Returns:
+        ys, xs: Tensors of shape [B, N_vis] with integer coordinates.
+    """
+    # Create full grid of valid top-left coordinates.
+    grid_y = torch.arange(0, H - patch_size + 1, patch_size, device=device)
+    grid_x = torch.arange(0, W - patch_size + 1, patch_size, device=device)
+    grid_y, grid_x = torch.meshgrid(grid_y, grid_x, indexing="ij")
+    grid_y = grid_y.flatten()  # [total_patches]
+    grid_x = grid_x.flatten()  # [total_patches]
+    total_patches = grid_y.numel()
+
+    # Ensure N_vis does not exceed the total number of patches.
+    N_vis = min(N_vis, total_patches)
+
+    # For each batch element, generate random scores for all candidates.
+    random_scores = torch.rand(B, total_patches, device=device)
+    # Sort to get indices, then select top N_vis candidates.
+    _, perm = random_scores.sort(dim=1)
+    perm = perm[:, :N_vis]  # shape: [B, N_vis]
+
+    # Gather candidate coordinates for each batch element.
+    ys_sampled = torch.gather(grid_y.unsqueeze(0).expand(B, -1), 1, perm)
+    xs_sampled = torch.gather(grid_x.unsqueeze(0).expand(B, -1), 1, perm)
+
+    return ys_sampled, xs_sampled
+
+
 def random_sampling(
     B: int, H: int, W: int, patch_size: int, N_vis: int, device: torch.device
 ) -> tuple[Int[Tensor, "B N"], Int[Tensor, "B N"]]:
@@ -118,7 +245,7 @@ class OffGridPatchEmbed(nn.Module):
         W: int,
         ys: Int[Tensor, "B N"],
         xs: Int[Tensor, "B N"],
-    ) -> Int[Tensor, "B (N*P*P)"]:
+    ) -> Int[Tensor, "B N*P*P"]:
         B, n_patches = ys.size(0), ys.size(1)
         dy = torch.arange(patch_size, device=ys.device).unsqueeze(1)
         dx = torch.arange(patch_size, device=ys.device).unsqueeze(0)

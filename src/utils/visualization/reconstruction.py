@@ -43,6 +43,30 @@ def _get_refpatch_id_batch(
     
     return refpatch_ids
 
+def _get_refpatch_id_batch_v2(
+    patch_positions_vis: Int[Tensor, "B N_vis 2"],
+    img_size: tuple[int, int],
+    ids_remove_pos: Int[Tensor, "B N_nopos"],
+) -> Int[Tensor, "B"]:
+    # only works for offgrid patchmae
+    
+    # Create ideal refpatch positions for all batches at once
+    center_refpatch_yx = torch.tensor(img_size, device=patch_positions_vis.device) // 2
+
+    patch_positions_nopos = torch.gather(
+        patch_positions_vis, dim=1, index=ids_remove_pos.unsqueeze(-1).repeat(1, 1, 2)
+    )
+
+    # Compute L1 distances in batched manner
+    distances = (patch_positions_nopos - center_refpatch_yx.view(1, 1, 2)).abs().sum(2)
+
+    # Get closest patch index for each batch
+    idx = torch.argmin(distances, dim=1)
+
+    # idx is w.r.t to the ids_remove_pos, need to convert to the original ids
+    refpatch_ids = torch.gather(ids_remove_pos, dim=1, index=idx.unsqueeze(-1))
+    return refpatch_ids
+
 
 def create_image_from_transforms(
     ref_transforms: dict[int, Tensor],
@@ -138,4 +162,51 @@ def plot_reconstructions(
 
         ax[3].imshow(img_input[i].permute(1, 2, 0))
         ax[3].set_title("Input Image")
+    return fig
+
+
+def plot_reconstructions_v2(
+    refpatch_ids: list[int],
+    ref_transforms: list[dict[int, Tensor]],
+    patch_positions_vis: Int[Tensor, "B n_patches 2"],
+    img: Float[Tensor, "B 3 H W"],
+    patch_size: int,
+):
+    B = len(refpatch_ids)
+    fig, axes = plt.subplots(B, 3, figsize=(15, 5 * B), squeeze=False)
+    for i, ax in enumerate(axes):
+        reconstructed_image = create_image_from_transforms(
+            ref_transforms=ref_transforms[i],
+            patch_positions=patch_positions_vis[i],
+            patch_size=patch_size,
+            img=img[i],
+            refpatch_id=refpatch_ids[i],
+        )
+
+        img_sampled = reconstruct_image_from_sampling(
+            patch_positions=patch_positions_vis[i],
+            patch_size=patch_size,
+            img=img[i],
+        )
+        y, x = patch_positions_vis[i][refpatch_ids[i]]
+        rect = Rectangle(
+            (x, y),
+            patch_size,
+            patch_size,
+            linewidth=1,
+            edgecolor="red",
+            facecolor="none",
+        )
+
+        ax[0].imshow(img[i].permute(1, 2, 0))
+        ax[0].set_title("Original Image")
+        ax[0].add_patch(copy(rect))
+        ax[1].imshow(img_sampled.permute(1, 2, 0))
+        ax[1].set_title("Ground Truth Image")
+        ax[1].add_patch(copy(rect))
+
+        ax[2].imshow(reconstructed_image.permute(1, 2, 0))
+        ax[2].set_title("Reconstructed Image")
+        ax[2].add_patch(copy(rect))
+
     return fig

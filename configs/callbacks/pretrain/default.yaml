@@ -1,0 +1,26 @@
+# @package callbacks
+defaults:
+  - /callbacks/pretrain/loggers/metric_logger
+  - /callbacks/pretrain/loggers/reconstruction_logger
+  - lr_monitor
+  - early_stopping
+  - model_checkpoint
+  - model_summary
+  - _self_
+
+model_checkpoint:
+  filename: "epoch_{epoch:03d}"
+  monitor: "val/rmse"
+  mode: "min"
+  save_last: True
+  auto_insert_metric_name: False
+  save_top_k: 1
+  every_n_epochs: 20
+
+early_stopping:
+  monitor: "val/rmse"
+  patience: 100
+  mode: "min"
+
+model_summary:
+  max_depth: -1

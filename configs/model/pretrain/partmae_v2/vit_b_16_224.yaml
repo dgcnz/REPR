@@ -1,12 +1,12 @@
-_target_: src.models.part_vit_module_v3.PARTModule
+_target_: src.models.partmae_v2_module.PARTModule
 
 defaults:
   - /scheduler: deit_cosine_sched
   - /optimizer: deit_adamw
 
 net:
-  _target_: src.models.components.partv3.PARTMaskedAutoEncoderViT
-  img_size: ???
+  _target_: src.models.components.partmae_v2.PARTMaskedAutoEncoderViT
+  img_size: 224
   patch_size: 16
   in_chans: 3
   embed_dim: 768
@@ -25,5 +25,5 @@ net:
   decoder_num_heads: 16
   num_targets: 2
 
-patch_size: ${model.net.patch_size}
+  sampler: random
 
