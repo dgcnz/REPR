@@ -29,9 +29,15 @@ def get_2d_sincos_pos_embed(
     # coords: (N, 2) -> returns (N, embed_dim)
     assert embed_dim % 2 == 0, "Total embedding dimension must be even."
     embed_dim_half = embed_dim // 2
-    x_embed = get_1d_sincos_pos_embed(coords[:, 0], embed_dim_half)
-    y_embed = get_1d_sincos_pos_embed(coords[:, 1], embed_dim_half)
+    # TODO: fuck, this should be swapped to account for (ys, xs) ordering of sampling
+    y_embed = get_1d_sincos_pos_embed(coords[:, 0], embed_dim_half)
+    x_embed = get_1d_sincos_pos_embed(coords[:, 1], embed_dim_half)
+    # old
+    # x_embed = get_1d_sincos_pos_embed(coords[:, 0], embed_dim_half)
+    # y_embed = get_1d_sincos_pos_embed(coords[:, 1], embed_dim_half)
     return torch.cat([x_embed, y_embed], dim=1)
+
+
 
 
 def get_canonical_coords(

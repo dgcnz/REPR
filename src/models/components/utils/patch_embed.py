@@ -6,6 +6,14 @@ from typing import Union, Tuple
 from torch.nn.modules.utils import _pair
 
 
+def random_sampling(
+    B: int, H: int, W: int, patch_size: int, N_vis: int, device: torch.device
+) -> tuple[Int[Tensor, "B N"], Int[Tensor, "B N"]]:
+    xs = torch.randint(0, W - patch_size + 1, (B, N_vis), device=device)
+    ys = torch.randint(0, H - patch_size + 1, (B, N_vis), device=device)
+    return ys, xs
+
+
 def stratified_jittered_sampling_same(
     B: int,
     H: int,
@@ -202,12 +210,57 @@ def ongrid_sampling(
     return ys_sampled, xs_sampled
 
 
-def random_sampling(
-    B: int, H: int, W: int, patch_size: int, N_vis: int, device: torch.device
-) -> tuple[Int[Tensor, "B N"], Int[Tensor, "B N"]]:
-    xs = torch.randint(0, W - patch_size + 1, (B, N_vis), device=device)
-    ys = torch.randint(0, H - patch_size + 1, (B, N_vis), device=device)
-    return ys, xs
+def ongrid_sampling_canonical(
+    B: int,
+    H: int,
+    W: int,
+    patch_size: int,
+    N_vis: int,
+    device: torch.device,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Generate on-grid patch positions independently for each batch element,
+    then return the selected (visible) patches in canonical order.
+
+    The function computes the full grid of top-left coordinates for patches,
+    generates random scores per candidate, selects N_vis indices per batch,
+    then sorts those indices in ascending (canonical) order.
+
+    Args:
+        B: Batch size.
+        H, W: Image dimensions.
+        patch_size: Patch size (assumed square).
+        N_vis: Number of visible patches to sample.
+        device: Torch device.
+
+    Returns:
+        ys, xs: Tensors of shape [B, N_vis] with integer coordinates in canonical order.
+    """
+    # Create full grid of valid top-left coordinates.
+    grid_y = torch.arange(0, H - patch_size + 1, patch_size, device=device)
+    grid_x = torch.arange(0, W - patch_size + 1, patch_size, device=device)
+    grid_y, grid_x = torch.meshgrid(grid_y, grid_x, indexing="ij")
+    grid_y = grid_y.flatten()  # [total_patches]
+    grid_x = grid_x.flatten()  # [total_patches]
+    total_patches = grid_y.numel()
+
+    # Ensure N_vis does not exceed the total number of patches.
+    N_vis = min(N_vis, total_patches)
+
+    # For each batch element, generate random scores for all candidate positions.
+    random_scores = torch.rand(B, total_patches, device=device)
+    # Sort the random scores to get a random permutation of the candidate indices.
+    _, perm = random_scores.sort(dim=1)
+    perm = perm[:, :N_vis]  # shape: [B, N_vis]
+
+    # Now sort the selected indices so that they appear in canonical order.
+    perm, _ = perm.sort(dim=1)
+
+    # Gather the candidate coordinates using the sorted indices.
+    ys_sampled = torch.gather(grid_y.unsqueeze(0).expand(B, -1), 1, perm)
+    xs_sampled = torch.gather(grid_x.unsqueeze(0).expand(B, -1), 1, perm)
+
+    return ys_sampled, xs_sampled
 
 
 class OffGridPatchEmbed(nn.Module):

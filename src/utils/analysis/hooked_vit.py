@@ -38,18 +38,18 @@ class HookedViT(torch.nn.Module):
         self.model = model.eval()
         self.head_name = head_name
         self.logger = logging.getLogger(__name__)
-
-        self.hook(model)
+        self.hook()
 
     def forward(self, x):
         self.clear()
         with torch.no_grad():
-            self.model(x)
+            out = self.model(x)
 
         return {
             "attn_fts": self.get_attn_fts(),
             "attns": self.get_attns(),
             "zs": self.get_zs(),
+            "out": out,
         }
 
     def clear(self):
@@ -62,28 +62,28 @@ class HookedViT(torch.nn.Module):
 
         return hook_fn
 
-    def hook_layer(self, model, layer_name: str):
-        layer = get_layer(model, layer_name)
+    def hook_layer(self, layer_name: str):
+        layer = get_layer(self.model, layer_name)
         self.logger.debug(f"Hooking {layer_name}: {layer.__class__}")
         hook = layer.register_forward_hook(self._hook_fn(layer_name))
         return hook
 
-    def hook(self, model):
+    def hook(self):
         # get Attention params: H, D
-        self.H = model.blocks[0].attn.num_heads
-        self.D = model.blocks[0].attn.proj.weight.shape[0]  # (D, D)
+        self.H = self.model.blocks[0].attn.num_heads
+        self.D = self.model.blocks[0].attn.proj.weight.shape[0]  # (D, D)
 
         # hook the layers
-        self.n_blocks = len(model.blocks)
+        self.n_blocks = len(self.model.blocks)
         for i in range(self.n_blocks):
             # deactivate fused_attn to get access to the individual components
-            model.blocks[i].attn.fused_attn = False
+            self.model.blocks[i].attn.fused_attn = False
             for layer_name in self._hooked_layers_per_block(i):
-                self.hooks[layer_name] = self.hook_layer(model, layer_name)
+                self.hooks[layer_name] = self.hook_layer(layer_name)
 
         # hook the head 
-        self.hooks[self.head_name] = self.hook_layer(model, self.head_name)
-        # self.hooks[''] = model.register_forward_hook(self._hook_fn(''))
+        self.hooks[self.head_name] = self.hook_layer(self.head_name)
+        # self.hooks[''] = self.model.register_forward_hook(self._hook_fn(''))
 
     def get_attn_ft(self, block_idx: int):
         proj_input = self.cache[f"blocks.{block_idx}.attn.proj"]["input"][0]

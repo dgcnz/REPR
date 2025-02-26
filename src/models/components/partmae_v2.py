@@ -20,7 +20,13 @@ from src.models.components.utils.part_utils import (
 )
 from torch.nn.functional import mse_loss, l1_loss
 from timm.models.vision_transformer import PatchEmbed, Block
-from src.models.components.utils.patch_embed import OffGridPatchEmbed, random_sampling, stratified_jittered_sampling, ongrid_sampling
+from src.models.components.utils.patch_embed import (
+    OffGridPatchEmbed,
+    random_sampling,
+    stratified_jittered_sampling,
+    ongrid_sampling,
+    ongrid_sampling_canonical,
+)
 from src.models.components.utils.offgrid_pos_embed import (
     get_2d_sincos_pos_embed,
     get_canonical_pos_embed,
@@ -54,6 +60,14 @@ class ForwardOutput(EncoderOutput, DecoderOutput, LossOutput):
     pass
 
 
+SAMPLERS = {
+    "random": random_sampling,
+    "stratified_jittered": stratified_jittered_sampling,
+    "ongrid": ongrid_sampling,
+    "ongrid_canonical": ongrid_sampling_canonical,
+}
+
+
 class PARTMaskedAutoEncoderViT(nn.Module):
     def __init__(
         self,
@@ -75,7 +89,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         num_targets: int = 2,
         # PART params
         sampler: str = "random",
-        criterion: str = "l1"
+        criterion: str = "l1",
     ):
         super().__init__()
 
@@ -87,25 +101,16 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.pos_mask_ratio = pos_mask_ratio
         self.num_targets = num_targets
 
-        samplers = {
-            "random": random_sampling,
-            "stratified_jittered": stratified_jittered_sampling,
-            "ongrid": ongrid_sampling,
-        }
-        
         self.patch_embed = OffGridPatchEmbed(
             img_size=img_size,
             patch_size=patch_size,
             in_chans=in_chans,
             embed_dim=embed_dim,
             mask_ratio=mask_ratio,
-            sampler=samplers[sampler],
+            sampler=self.samplers[sampler],
         )
 
-        criterions = {
-            "l1": l1_loss,
-            "mse": mse_loss
-        }
+        criterions = {"l1": l1_loss, "mse": mse_loss}
         self.criterion = criterions[criterion]
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -151,6 +156,20 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.decoder_pred = nn.Linear(decoder_embed_dim, num_targets, bias=False)
         self.tanh = nn.Tanh()
         self.initialize_weights()
+
+    def update_conf(
+        self,
+        sampler: str = None,
+        mask_ratio: float = None,
+        pos_mask_ratio: float = None,
+    ):
+        if mask_ratio is not None:
+            self.mask_ratio = mask_ratio
+            self.patch_embed.mask_ratio = mask_ratio
+        if pos_mask_ratio is not None:
+            self.pos_mask_ratio = pos_mask_ratio
+        if sampler is not None:
+            self.patch_embed.sampler = SAMPLERS[sampler]
 
     def initialize_weights(self):
         # initialization
