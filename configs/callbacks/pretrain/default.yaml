@@ -15,7 +15,7 @@ model_checkpoint:
   save_last: True
   auto_insert_metric_name: False
   save_top_k: 1
-  every_n_epochs: 20
+  every_n_epochs: 100
 
 early_stopping:
   monitor: "val/rmse"

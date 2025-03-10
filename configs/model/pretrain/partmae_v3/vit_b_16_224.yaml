@@ -1,0 +1,29 @@
+_target_: src.models.partmae_v2_module.PARTModule
+
+defaults:
+  - /scheduler: deit_cosine_sched
+  - /optimizer: deit_adamw
+
+net:
+  _target_: src.models.components.partmae_v2.PARTMaskedAutoEncoderViT
+  img_size: 224
+  patch_size: 16
+  in_chans: 3
+  embed_dim: 768
+  depth: 12
+  num_heads: 12
+  mlp_ratio: 4
+  norm_layer:
+    _target_: torch.nn.LayerNorm
+    eps: 1e-6
+    _partial_: true
+  mask_ratio: 0.75
+  pos_mask_ratio: 0.75
+
+  decoder_embed_dim: 512
+  decoder_depth: 8
+  decoder_num_heads: 16
+  num_targets: 2
+
+  sampler: random
+
