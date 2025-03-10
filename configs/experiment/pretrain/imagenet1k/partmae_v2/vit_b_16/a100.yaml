@@ -10,15 +10,14 @@ defaults:
 trainer:
   min_epochs: 200
   max_epochs: 800
-  check_val_every_n_epoch: 1
-  deterministic: true
+  check_val_every_n_epoch: 100
+  accumulate_grad_batches: 2
+  deterministic: false
   devices: 4
   num_nodes: 1
   sync_batchnorm: true
 
 model:
-  optimizer:
-    lr: 1.2e-3
   scheduler:
     warmup_t: 10
   net:
@@ -26,7 +25,7 @@ model:
     criterion: l1
 
 data:
-  batch_size: 2048
+  batch_size: 4096
   num_workers: 16
   cache_dir: /scratch-shared/dcanez/HF_HOME
 

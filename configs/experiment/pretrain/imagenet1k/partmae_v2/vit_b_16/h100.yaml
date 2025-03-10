@@ -15,10 +15,9 @@ trainer:
   devices: 2
   num_nodes: 1
   sync_batchnorm: true
+  accumulate_grad_batches: 1
 
 model:
-  optimizer:
-    lr: 1.2e-3
   scheduler:
     warmup_t: 10
   net:

@@ -20,8 +20,6 @@ trainer:
     _target_: src.strategies.compile.CompileStrategy
 
 model:
-  optimizer:
-    lr: 1.2e-3
   scheduler:
     warmup_t: 10
 

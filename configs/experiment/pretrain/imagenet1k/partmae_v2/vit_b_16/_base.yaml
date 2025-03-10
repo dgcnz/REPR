@@ -25,6 +25,9 @@ trainer:
   max_epochs: ???
   check_val_every_n_epoch: 1
   deterministic: true
+  accumulate_grad_batches: ???
+
+blr: 1.5e-4
 
 model:
   net:
@@ -40,6 +43,7 @@ model:
     t_initial: 800
 
   optimizer:
+    lr: ${eval:${blr} * ${data.batch_size} * ${trainer.accumulate_grad_batches} / 256}
     weight_decay: 0.05
 
 data:
