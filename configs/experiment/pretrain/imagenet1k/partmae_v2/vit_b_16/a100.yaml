@@ -8,8 +8,8 @@ defaults:
   - override /trainer: ddp
 
 trainer:
-  min_epochs: 100
-  max_epochs: 100
+  min_epochs: 200
+  max_epochs: 800
   check_val_every_n_epoch: 1
   deterministic: true
   devices: 4
