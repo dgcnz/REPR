@@ -266,7 +266,6 @@ def ongrid_sampling_canonical(
 class OffGridPatchEmbed(nn.Module):
     def __init__(
         self,
-        img_size: int = 224,
         patch_size: int = 16,
         in_chans: int = 3,
         embed_dim: int = 768,
@@ -275,21 +274,11 @@ class OffGridPatchEmbed(nn.Module):
     ) -> None:
         super().__init__()
         self.patch_size = _pair(patch_size)
-        self.img_size = _pair(img_size)
         self.in_chans = in_chans
         self.embed_dim = embed_dim
         self.proj = nn.Linear(patch_size * patch_size * in_chans, embed_dim)
         self.sampler = sampler
         self.mask_ratio = mask_ratio
-
-    def _init_img_size(self, img_size: Union[int, Tuple[int, int]]):
-        assert self.patch_size
-        if img_size is None:
-            return None, None, None
-        img_size = _pair(img_size)
-        grid_size = tuple([s // p for s, p in zip(img_size, self.patch_size)])
-        num_patches = grid_size[0] * grid_size[1]
-        return img_size, grid_size, num_patches
 
     def _create_sampled_grid_flattened(
         self,

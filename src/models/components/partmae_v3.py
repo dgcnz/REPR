@@ -71,6 +71,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         alpha_s: float = 0.75,  # weight between inter/intra scale
     ):
         super().__init__()
+        assert n_views > 1, "At least 2 views per image for inter-view comparison are required"
         self.n_views = n_views
         self.embed_dim = embed_dim
         self.img_size = img_size  # crop size
@@ -267,8 +268,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         patch_positions_nopos: [B, V, N_nopos, 2] patch positions in crop coordinates.
         params: [B, V, 4] augmentation parameters (y, x, h, w) in canonical coordinates.
         Returns:
-          gt_dt: [B, V, V, N_nopos, N_nopos, 2] normalized translation differences.
-          gt_ds: [B, V, V, N_nopos, N_nopos, 2] normalized log-scale ratios.
+          gt_dT: [B, V, V, N_nopos, N_nopos, 4] normalized differences.
         """
         crop_size = self.img_size
         canonical_size = self.canonical_img_size
@@ -297,18 +297,17 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # --- Compute differences in one go ---
         gt_dT = pose_j - pose_i  # [B, V, V, N_nopos, N_nopos, 4]
 
-        # --- Split and normalize ---
-        gt_dt = gt_dT[..., :2] / canonical_size  # [B, V, V, N_nopos, N_nopos, 2]
-        gt_ds = gt_dT[..., 2:] / self.max_scale_ratio  # [B, V, V, N_nopos, N_nopos, 2]
+        # --- Normalize ---
+        gt_dT[..., :2] /= canonical_size
+        gt_dT[..., 2:] /= self.max_scale_ratio
 
-        return {"gt_dt": gt_dt, "gt_ds": gt_ds}
+        return gt_dT
 
     def _compute_pred(self, pose_pred_nopos: Tensor) -> dict:
         """
         pose_pred_nopos: [B, V, N_nopos, 4]
         Returns:
-          pred_dt: [B, V, V, N_nopos, N_nopos, 2]
-          pred_ds: [B, V, V, N_nopos, N_nopos, 2]
+          pred_dT: [B, V, V, N_nopos, N_nopos, 4]
         """
         # Create source (u) and target (v) view representations with one unsqueeze operation each
         pose_u = pose_pred_nopos.unsqueeze(1).unsqueeze(4)  # [B, 1, V, N_nopos, 1, 4]
@@ -316,12 +315,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
 
         # Compute differences for all transforms at once and apply tanh
         pred_dT = self.tanh(pose_v - pose_u)  # [B, V, V, N_nopos, N_nopos, 4]
-
-        # Split the result into translation and scale components
-        pred_dt = pred_dT[..., :2]  # [B, V, V, N_nopos, N_nopos, 2]
-        pred_ds = pred_dT[..., 2:]  # [B, V, V, N_nopos, N_nopos, 2]
-
-        return {"pred_dt": pred_dt, "pred_ds": pred_ds}
+        return pred_dT
 
     def _forward_loss(
         self, pose_pred_nopos: Tensor, patch_positions_nopos: Tensor, params: Tensor
@@ -329,52 +323,57 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         """
         Compute separated loss for inter‐view and intra‐view predictions.
         Args:
-        pose_pred_nopos: [B, V, N_nopos, 4] predicted transforms for each view.
-        patch_positions_nopos: [B, V, N_nopos, 2] patch positions in crop coordinates.
-        params: [B, V, 4] augmentation parameters (y, x, h, w) in canonical coordinates.
+            pose_pred_nopos: [B, V, N_nopos, 4] predicted transforms for each view.
+            patch_positions_nopos: [B, V, N_nopos, 2] patch positions in crop coordinates.
+            params: [B, V, 4] augmentation parameters (y, x, h, w) in canonical coordinates.
         Returns:
-        A dictionary with:
-            - loss_intra_t: loss on the intra–view (diagonal) patch differences.
-            - loss_inter_t: loss on the off–diagonal (true inter–view) patch differences.
-            - loss_intra_s: loss on the intra-view scale differences.
-            - loss_inter_s: loss on the inter–view scale differences.
-            - And the separated prediction and ground truth tensors (for debugging).
+            A dictionary with various loss components.
         """
-        # Compute the full inter-view predictions and ground truth.
-        pred_dict = self._compute_pred(pose_pred_nopos)
-        gt_dict = self._compute_gt(patch_positions_nopos, params)
-
-        # Both tensors have shape [B, V, V, N_nopos, N_nopos, 2]
-        # Extract the diagonal (intra-view): compare patches within the same view.
-        pred_intra_dt = torch.diagonal(pred_dict["pred_dt"], dim1=1, dim2=2)
-        gt_intra_dt = torch.diagonal(gt_dict["gt_dt"], dim1=1, dim2=2)
-        loss_intra_t = self.criterion(pred_intra_dt, gt_intra_dt)
-
-        # Also extract intra-view scale predictions (diagonal elements)
-        pred_intra_ds = torch.diagonal(pred_dict["pred_ds"], dim1=1, dim2=2)
-        gt_intra_ds = torch.diagonal(gt_dict["gt_ds"], dim1=1, dim2=2)
-        loss_intra_s = self.criterion(pred_intra_ds, gt_intra_ds)
-
-        # Extract off-diagonals (inter-view): unique comparisons where u != v.
-        V = pose_pred_nopos.shape[1]
-        triu_idx = torch.triu_indices(V, V, offset=1, device=pose_pred_nopos.device)
-        pred_inter_dt = pred_dict["pred_dt"][:, triu_idx[0], triu_idx[1], :, :, :]
-        gt_inter_dt = gt_dict["gt_dt"][:, triu_idx[0], triu_idx[1], :, :, :]
-        loss_inter_t = self.criterion(pred_inter_dt, gt_inter_dt)
-
-        # For inter-view scale
-        pred_inter_ds = pred_dict["pred_ds"][:, triu_idx[0], triu_idx[1], :, :, :]
-        gt_inter_ds = gt_dict["gt_ds"][:, triu_idx[0], triu_idx[1], :, :, :]
-        loss_inter_s = self.criterion(pred_inter_ds, gt_inter_ds)
-
-        # Combine losses with weighting.
+        # Compute the full inter-view predictions and ground truth
+        pred_dT = self._compute_pred(pose_pred_nopos)  # [B, V, V, N_nopos, N_nopos, 4]
+        gt_dT = self._compute_gt(patch_positions_nopos, params)  # [B, V, V, N_nopos, N_nopos, 4]
+        
+        # Compute element-wise loss without reduction
+        loss_full = self.criterion(pred_dT, gt_dT, reduction='none')  # [B, V, V, N_nopos, N_nopos, 4]
+        
+        # Create masks for translation and scale components
+        B, V = pose_pred_nopos.shape[:2]
+        N_nopos = pose_pred_nopos.shape[2]
+        device = pose_pred_nopos.device
+        
+        # Create view relationship masks
+        diag_mask = torch.eye(V, device=device).view(1, V, V, 1, 1, 1)  # Intra-view (diagonal)
+        offdiag_mask = 1 - diag_mask  # Inter-view (off-diagonal)
+        
+        # Precompute denominators for loss normalization
+        diag_denom = V * B * N_nopos * N_nopos * 2  # Total elements in diagonal masks after broadcasting
+        offdiag_denom = V * (V - 1) * B * N_nopos * N_nopos * 2  # Total elements in off-diagonal masks
+        
+        # Split losses for translation and scale
+        # Translation = first 2 dimensions, Scale = last 2 dimensions
+        loss_t_full = loss_full[..., :2]  # [B, V, V, N_nopos, N_nopos, 2]
+        loss_s_full = loss_full[..., 2:]  # [B, V, V, N_nopos, N_nopos, 2]
+        
+        # Calculate intra and inter view losses with proper masking
+        # For translation
+        masked_t_intra = loss_t_full * diag_mask
+        loss_intra_t = masked_t_intra.sum() / diag_denom
+        
+        masked_t_inter = loss_t_full * offdiag_mask
+        loss_inter_t = masked_t_inter.sum() / offdiag_denom
+        
+        # For scale
+        masked_s_intra = loss_s_full * diag_mask
+        loss_intra_s = masked_s_intra.sum() / diag_denom
+        
+        masked_s_inter = loss_s_full * offdiag_mask
+        loss_inter_s = masked_s_inter.sum() / offdiag_denom
+        
+        # Combine losses with weightings
         loss_t = loss_inter_t * self.alpha_t + loss_intra_t * (1 - self.alpha_t)
-
-        # Apply alpha_s weighting between inter-view and intra-view scale losses
         loss_s = loss_inter_s * self.alpha_s + loss_intra_s * (1 - self.alpha_s)
-
         loss = self.alpha_ts * loss_t + (1 - self.alpha_ts) * loss_s
-
+        
         return {
             "loss_intra_t": loss_intra_t,
             "loss_inter_t": loss_inter_t,
@@ -383,14 +382,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             "loss_t": loss_t,
             "loss_s": loss_s,
             "loss": loss,
-            "pred_intra_dt": pred_intra_dt,
-            "gt_intra_dt": gt_intra_dt,
-            "pred_inter_dt": pred_inter_dt,
-            "gt_inter_dt": gt_inter_dt,
-            "pred_inter_ds": pred_inter_ds,
-            "gt_inter_ds": gt_inter_ds,
-            "pred_intra_ds": pred_intra_ds,
-            "gt_intra_ds": gt_intra_ds,
         }
 
     def forward(self, x: Tensor, params: Tensor):

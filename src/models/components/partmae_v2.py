@@ -34,32 +34,6 @@ from src.models.components.utils.offgrid_pos_embed import (
 from torch.nn.modules.utils import _pair
 
 
-class EncoderOutput(TypedDict):
-    "The output of the encoder"
-    z: Float[Tensor, "B N_vis D"]
-    patch_positions_vis: Float[Tensor, "B N_vis 2"]
-    patch_positions_pos: Float[Tensor, "B N_pos 2"]
-    ids_keep: Int[Tensor, "B N_vis"]
-    ids_nopos: Int[Tensor, "B N_nopos"]
-    mask_pos: Bool[Tensor, "B N_vis"]
-    ids_keep_pos: Int[Tensor, "B N_pos"]
-    ids_restore_pos: Int[Tensor, "B ?"]
-
-
-class DecoderOutput(TypedDict):
-    pred_T: Float[Tensor, "B N_nopos**2 2"]
-
-
-class LossOutput(TypedDict):
-    loss: Float[Tensor, "B"]
-    patch_pair_indices: Int[Tensor, "B N_nopos**2 2"]
-    gt_T: Float[Tensor, "B N_nopos**2 2"]
-
-
-class ForwardOutput(EncoderOutput, DecoderOutput, LossOutput):
-    pass
-
-
 SAMPLERS = {
     "random": random_sampling,
     "stratified_jittered": stratified_jittered_sampling,
@@ -69,6 +43,19 @@ SAMPLERS = {
 
 
 class PARTMaskedAutoEncoderViT(nn.Module):
+    """ 
+    Self-supervised training by predicting distances between patches in an image.
+    
+    CHANGELOG:
+    - Masking makes pretext task more challenging and forces the model not to rely only on local information
+    - Position embeddings are added:
+        - They are dynamically computed based on the sampled coordinates.
+        - This reduces the pretraining vs finetuning discrepancy. 
+        - To prevent the model overrelying on them, some are masked. Only those tokens are used for prediction.
+    - Deep decoder is added:
+        - Avoids encoder to focus on learning good general representations, rather than pretext-specific ones.
+        - Avoids low-frequency collapse on encoder representations.
+    """ 
     def __init__(
         self,
         # Encoder params
@@ -102,12 +89,11 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.num_targets = num_targets
 
         self.patch_embed = OffGridPatchEmbed(
-            img_size=img_size,
             patch_size=patch_size,
             in_chans=in_chans,
             embed_dim=embed_dim,
             mask_ratio=mask_ratio,
-            sampler=self.samplers[sampler],
+            sampler=SAMPLERS[sampler],
         )
 
         criterions = {"l1": l1_loss, "mse": mse_loss}
@@ -227,7 +213,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
 
         return ids_keep, mask, ids_restore, ids_remove
 
-    def forward_encoder(self, x: Float[Tensor, "B C H W"]) -> EncoderOutput:
+    def forward_encoder(self, x: Float[Tensor, "B C H W"]):
         # patch_embed already includes masking by offgrid subsampling
         x, patch_positions_vis = self.patch_embed(x)
         # patch_positions_vis[i] is the position of x[i]
@@ -288,7 +274,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         x: Float[Tensor, "B N_vis D"],
         img_size: int,
         ids_remove_pos: Int[Tensor, "B N_nopos"],
-    ) -> DecoderOutput:
+    ):
         x = self.decoder_embed(x)
         for blk in self.decoder_blocks:
             x = blk(x)
@@ -312,7 +298,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         ids_remove_pos: Int[Tensor, "B N_nopos"],
         patch_positions_vis: Int[Tensor, "B N_vis 2"],
         img_size: int,
-    ) -> LossOutput:
+    ):
         """
         Compute the loss for the model.
         :param pred_T: predicted transformations
@@ -332,7 +318,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             "gt_T": gt_T,
         }
 
-    def forward(self, x: Float[Tensor, "B C H W"]) -> ForwardOutput:
+    def forward(self, x: Float[Tensor, "B C H W"]):
         """
         :param x: image batch
         :return: ForwardOutput

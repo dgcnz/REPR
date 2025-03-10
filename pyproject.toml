@@ -32,6 +32,7 @@ colorstamps = "^0.1.3"
 aim = "^3.27.0"
 plotly = "^5.24.1"
 einops = "^0.8.0"
+parameterized-transforms = {path = "../parameterized-transforms"}
 
 [[tool.poetry.source]]
 name = "torch-cu126"
