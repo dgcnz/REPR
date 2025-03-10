@@ -43,7 +43,9 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         n_views: int = 2,  # number of views per image
         # Encoder parameters
         img_size: int = 224,  # crop size (e.g., 224)
+        # canonical_img_size and max_scale_ratio are used for normalization.
         canonical_img_size: int = 512,  # canonical (original) image size (e.g., 512)
+        max_scale_ratio: float = 4.0,  # maximum scale ratio for normalization
         patch_size: int = 16,
         in_chans: int = 3,
         embed_dim: int = 1024,
@@ -76,6 +78,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.mask_ratio = mask_ratio
         self.pos_mask_ratio = pos_mask_ratio
         self.num_targets = num_targets
+        self.max_scale_ratio = max_scale_ratio
         self.alpha_ts = alpha_ts
         self.alpha_t = alpha_t
 
@@ -166,6 +169,29 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
 
+    def _drop_pos(
+        self, pose_pred: Tensor, patch_positions: Tensor, ids_remove_pos: Tensor
+    ):
+        """
+        Drop from pose_pred and patch_positions the tokens that have positional embeddings.
+        Args:
+          pose_pred: [B*n_views, N_vis, 4]
+          patch_positions: [B*n_views, N_vis, 2]
+          ids_remove_pos: [B*n_views, N_nopos]
+        Returns:
+          pose_pred_nopos: [B*n_views, N_nopos, 4]
+          patch_positions_nopos: [B*n_views, N_nopos, 2]
+        """
+        pose_pred_nopos = torch.gather(
+            pose_pred,
+            dim=1,
+            index=ids_remove_pos.unsqueeze(-1).expand(-1, -1, self.num_targets),
+        )
+        patch_positions_nopos = torch.gather(
+            patch_positions, dim=1, index=ids_remove_pos.unsqueeze(-1).expand(-1, -1, 2)
+        )
+        return pose_pred_nopos, patch_positions_nopos
+
     def random_masking(self, x: Tensor, mask_ratio: float):
         B, N, D = x.shape
         len_keep = int(N * (1 - mask_ratio))
@@ -230,103 +256,125 @@ class PARTMaskedAutoEncoderViT(nn.Module):
     #    canonical_pos = (y, x) + (pos / self.img_size) * (h, w)
     # Ground truth differences are then computed in canonical coordinates and normalized by self.canonical_img_size.
 
-    def _compute_inter_view_gt(self, patch_positions: Tensor, params: Tensor) -> dict:
+    def _compute_gt(
+        self,
+        patch_positions_nopos: Int[Tensor, "B V N_nopos 2"],
+        params: Int[Tensor, "B V 4"],
+    ):
         """
-        pos_group: [B, V, N_vis, 2] patch positions in crop coordinates.
-        params_group: [B, V, 4] augmentation parameters (y, x, h, w) in canonical coordinates.
+        patch_positions_nopos: [B, V, N_nopos, 2] patch positions in crop coordinates.
+        params: [B, V, 4] augmentation parameters (y, x, h, w) in canonical coordinates.
         Returns:
-          gt_inter_dt: [B, V, V, N_vis, N_vis, 2] normalized translation differences.
-          gt_inter_ds: [B, V, V, 1, 1, 2] scale ratios.
+          gt_dt: [B, V, V, N_nopos, N_nopos, 2] normalized translation differences.
+          gt_ds: [B, V, V, N_nopos, N_nopos, 2] normalized log-scale ratios.
         """
         crop_size = self.img_size
         canonical_size = self.canonical_img_size
-        # Map each patch from crop coordinates to canonical coordinates.
-        # canonical_pos = (y, x) + (pos / crop_size) * (h, w)
-        offset = params[..., :2].unsqueeze(2)  # [B, V, 1, 2]
-        scale = params[..., 2:].unsqueeze(2)  # [B, V, 1, 2]
-        gt_patch_positions = offset + (patch_positions / crop_size) * scale
-        # canonical_pos: [B, V, N_vis, 2]
-        # Expand to compare every patch in view u with every patch in view v.
-        gt_t_i = gt_patch_positions.unsqueeze(1).unsqueeze(4)  # [B, 1, V, N_vis, 1, 2]
-        gt_t_j = gt_patch_positions.unsqueeze(2).unsqueeze(3)  # [B, V, 1, 1, N_vis, 2]
-        gt_dt = gt_t_j - gt_t_i  # [B, V, V, N_vis, N_vis, 2]
-        gt_dt = gt_dt / canonical_size
-        # Compute scale ratios from augmentation parameters.
-        gt_h = params[..., 2]  # [B, V]
-        gt_w = params[..., 3]  # [B, V]
-        gt_ds = torch.stack(
-            [
-                gt_h.unsqueeze(1) / gt_h.unsqueeze(2),
-                gt_w.unsqueeze(1) / gt_w.unsqueeze(2),
-            ],
-            dim=-1,
-        )  # [B, V, V, 2]
-        gt_ds = gt_ds.unsqueeze(3).unsqueeze(3)  # [B, V, V, 1, 1, 2]
-        return {"gt_inter_dt": gt_dt, "gt_inter_ds": gt_ds}
+        params = params.unsqueeze(2)  # [B, V, 1, 4]
 
-    def _compute_inter_view_pred(self, pose_pred_group: Tensor) -> dict:
+        # --- Compute patch positions in canonical coordinates ---
+        offset = params[..., :2]  # [B, V, 1, 2]
+        size = params[..., 2:4]  # [B, V, 1, 2]
+        # gt_patch_positions: [B, V, N_nopos, 2]
+        gt_patch_positions = offset + (patch_positions_nopos / crop_size) * size
+
+        # --- Compute log scale parameters ---
+        # gt_log_hw: [B, V, N_nopos, 2]
+        gt_log_hw = torch.log(size).expand_as(gt_patch_positions)
+
+        # --- Stack positions and scales into a single representation ---
+        # gt_pose [B, V, N_nopos, 4]
+        gt_pose = torch.cat([gt_patch_positions, gt_log_hw], dim=-1)
+
+        # --- Create source and target view representations ---
+        # [B, 1, V, N_nopos, 1, 4]
+        pose_i = gt_pose.unsqueeze(1).unsqueeze(4)
+        # [B, V, 1, 1, N_nopos, 4]
+        pose_j = gt_pose.unsqueeze(2).unsqueeze(3)
+
+        # --- Compute differences in one go ---
+        gt_dT = pose_j - pose_i  # [B, V, V, N_nopos, N_nopos, 4]
+
+        # --- Split and normalize ---
+        gt_dt = gt_dT[..., :2] / canonical_size  # [B, V, V, N_nopos, N_nopos, 2]
+        gt_ds = gt_dT[..., 2:] / self.max_scale_ratio  # [B, V, V, N_nopos, N_nopos, 2]
+
+        return {"gt_dt": gt_dt, "gt_ds": gt_ds}
+
+    def _compute_pred(self, pose_pred_nopos: Tensor) -> dict:
         """
-        pose_pred_group: [B, V, N_vis, 4]
+        pose_pred_nopos: [B, V, N_nopos, 4]
         Returns:
-          pred_inter_dt: [B, V, V, N_vis, N_vis, 2]
-          pred_inter_ds: [B, V, V, N_vis, N_vis, 2]
+          pred_dt: [B, V, V, N_nopos, N_nopos, 2]
+          pred_ds: [B, V, V, N_nopos, N_nopos, 2]
         """
-        pose_t = pose_pred_group[..., :2]  # [B, V, N_vis, 2]
-        pose_log_s = pose_pred_group[..., 2:]  # [B, V, N_vis, 2]
-        # Expand so that we compare every patch in view u with every patch in view v:
-        pose_t_u = pose_t.unsqueeze(1).unsqueeze(4)  # [B, 1, V, N_vis, 1, 2]
-        pose_t_v = pose_t.unsqueeze(2).unsqueeze(3)  # [B, V, 1, 1, N_vis, 2]
-        pred_dt = self.tanh(pose_t_v - pose_t_u)  # [B, V, V, N_vis, N_vis, 2]
-        pose_log_s_u = pose_log_s.unsqueeze(1).unsqueeze(4)  # [B, 1, V, N_vis, 1, 2]
-        pose_log_s_v = pose_log_s.unsqueeze(2).unsqueeze(3)  # [B, V, 1, 1, N_vis, 2]
-        pred_log_s = pose_log_s_v - pose_log_s_u  # [B, V, V, N_vis, N_vis, 2]
-        pred_ds = torch.exp(pred_log_s)
-        return {"pred_inter_dt": pred_dt, "pred_inter_ds": pred_ds}
+        # Create source (u) and target (v) view representations with one unsqueeze operation each
+        pose_u = pose_pred_nopos.unsqueeze(1).unsqueeze(4)  # [B, 1, V, N_nopos, 1, 4]
+        pose_v = pose_pred_nopos.unsqueeze(2).unsqueeze(3)  # [B, V, 1, 1, N_nopos, 4]
 
-    def _forward_inter_loss(
-        self,
-        pose_pred: Tensor,
-        patch_positions_vis: Tensor,
-        params: Tensor,
+        # Compute differences for all transforms at once and apply tanh
+        pred_dT = self.tanh(pose_v - pose_u)  # [B, V, V, N_nopos, N_nopos, 4]
+
+        # Split the result into translation and scale components
+        pred_dt = pred_dT[..., :2]  # [B, V, V, N_nopos, N_nopos, 2]
+        pred_ds = pred_dT[..., 2:]  # [B, V, V, N_nopos, N_nopos, 2]
+
+        return {"pred_dt": pred_dt, "pred_ds": pred_ds}
+
+    def _forward_separated_loss(
+        self, pose_pred_nopos: Tensor, patch_positions_nopos: Tensor, params: Tensor
     ) -> dict:
         """
-        Compute the cross-view loss.
-        """
-        out = {}
-        out.update(self._compute_inter_view_pred(pose_pred))
-        out.update(self._compute_inter_view_gt(patch_positions_vis, params))
-        loss_inter_t = self.criterion(out["pred_inter_dt"], out["gt_inter_dt"])
-        loss_inter_s = self.criterion(out["pred_inter_ds"], out["gt_inter_ds"])
-        out.update({"loss_inter_t": loss_inter_t, "loss_inter_s": loss_inter_s})
-        return out
-
-    def _drop_pos(
-        self, pose_pred: Tensor, patch_positions: Tensor, ids_remove_pos: Tensor
-    ):
-        """
-        Drop pose_pred and patch_positions of tokens with positional information.
+        Compute separated loss for inter‐view and intra‐view predictions.
         Args:
-          pose_pred: [B, V, N_vis, 4]
-          patch_positions: [B, V, N_vis, 2]
-          ids_remove_pos: [B, V, N_mask]
+        pose_pred_nopos: [B, V, N_nopos, 4] predicted transforms for each view.
+        patch_positions_nopos: [B, V, N_nopos, 2] patch positions in crop coordinates.
+        params: [B, V, 4] augmentation parameters (y, x, h, w) in canonical coordinates.
+        Returns:
+        A dictionary with:
+            - loss_intra_t: loss on the intra–view (diagonal) patch differences.
+            - loss_inter_t: loss on the off–diagonal (true inter–view) patch differences.
+            - loss_inter_s: loss on the inter–view scale differences.
+            - And the separated prediction and ground truth tensors (for debugging).
         """
-        pose_pred_nopos = torch.gather(
-            pose_pred,
-            dim=2,
-            index=ids_remove_pos.unsqueeze(-1).expand(-1, -1, -1, 4),
-        )
-        patch_positions_nopos = torch.gather(
-            patch_positions,
-            dim=2,
-            index=ids_remove_pos.unsqueeze(-1).expand(-1, -1, -1, 2),
-        )
-        return pose_pred_nopos, patch_positions_nopos
+        # Compute the full inter-view predictions and ground truth.
+        pred_dict = self._compute_pred(pose_pred_nopos)
+        gt_dict = self._compute_gt(patch_positions_nopos, params)
+        # Both tensors have shape [B, V, V, N_nopos, N_nopos, 2]
+        # Extract the diagonal (intra-view): compare patches within the same view.
+        pred_intra_dt = torch.diagonal(pred_dict["pred_dt"], dim1=1, dim2=2)
+        gt_intra_dt = torch.diagonal(gt_dict["gt_dt"], dim1=1, dim2=2)
+        loss_intra_t = self.criterion(pred_intra_dt, gt_intra_dt)
+
+        # Extract off-diagonals (inter-view): unique comparisons where u != v.
+        V = pose_pred_nopos.shape[1]
+        triu_idx = torch.triu_indices(V, V, offset=1, device=pose_pred_nopos.device)
+        pred_inter_dt = pred_dict["pred_dt"][:, triu_idx[0], triu_idx[1], :, :, :]
+        gt_inter_dt = gt_dict["gt_dt"][:, triu_idx[0], triu_idx[1], :, :, :]
+        loss_inter_t = self.criterion(pred_inter_dt, gt_inter_dt)
+
+        # For scale, we assume that intra-view scale is trivial so we only compute inter-view.
+        pred_inter_ds = pred_dict["pred_ds"][:, triu_idx[0], triu_idx[1], :, :, :]
+        gt_inter_ds = gt_dict["gt_ds"][:, triu_idx[0], triu_idx[1], :, :, :]
+        loss_inter_s = self.criterion(pred_inter_ds, gt_inter_ds)
+
+        return {
+            "loss_intra_t": loss_intra_t,
+            "loss_inter_t": loss_inter_t,
+            "loss_inter_s": loss_inter_s,
+            "pred_intra_dt": pred_intra_dt,
+            "gt_intra_dt": gt_intra_dt,
+            "pred_inter_dt": pred_inter_dt,
+            "gt_inter_dt": gt_inter_dt,
+            "pred_inter_ds": pred_inter_ds,
+            "gt_inter_ds": gt_inter_ds,
+        }
 
     def forward(self, x: Tensor, params: Tensor):
         """
         Args:
-          x: tensor of shape [B*n_views, C, H, W] with n_views for each image arranged consecutively.
-          params: tensor of shape [B*n_views, 4] with augmentation parameters (y, x, h, w) for each view.
+        x: [B*n_views, C, H, W] with n_views per image arranged consecutively.
+        params: [B*n_views, 4] augmentation parameters (y, x, h, w) for each view.
         """
         out = dict()
         B_total, _, H, W = x.shape
@@ -334,32 +382,38 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         V, nT = self.n_views, self.num_targets
         B = B_total // V
 
-        # Run encoder and decoder
+        # Run encoder and decoder.
         out.update(self.forward_encoder(x))
         out.update(self.forward_decoder(out["z_enc"]))
 
+        # Drop the positional tokens to use only masked tokens.
         pose_pred_nopos, patch_positions_nopos = self._drop_pos(
             out["pose_pred"], out["patch_positions_vis"], out["ids_remove_pos"]
         )
 
-        # Group by view
-        pose_pred_nopos_group = pose_pred_nopos.view(B, V, -1, nT)
-        patch_positions_nopos_group = patch_positions_nopos.view(B, V, -1, 2)
-        params_group = params.view(B, V, 4)  # [B, V, 4]
+        # Reshape into groups: [B, V, ...]
+        pose_pred_nopos_group = pose_pred_nopos.view(B, V, -1, nT)  # [B, V, N_mask, 4]
+        patch_positions_nopos_group = patch_positions_nopos.view(
+            B, V, -1, 2
+        )  # [B, V, N_mask, 2]
+        params_group = params.view(B, V, 4)
 
-        # Compute inter-view loss using only the masked tokens (no positional info).
-        inter_out = self._forward_inter_loss(
+        # Compute separated inter/intra loss.
+        loss_dict = self._forward_separated_loss(
             pose_pred_nopos_group, patch_positions_nopos_group, params_group
         )
 
-        # Use only the translation loss from the inter-view branch (scale is considered trivial)
-        loss = inter_out["loss_inter_t"]
-
+        # Combine losses with weighting.
+        loss_t = loss_dict["loss_inter_t"] * self.alpha_t + loss_dict[
+            "loss_intra_t"
+        ] * (1 - self.alpha_t)
+        loss_s = loss_dict["loss_inter_s"]
+        loss = self.alpha_ts * loss_t + (1 - self.alpha_ts) * loss_s
         out.update(
             {
                 "loss": loss,
-                "loss_t": inter_out["loss_inter_t"],
-                "loss_s": inter_out["loss_inter_s"],
+                "loss_t": loss_t,
+                "loss_s": loss_s,
             }
         )
         return out
@@ -389,14 +443,10 @@ PART_mae_vit_base_patch16 = (
 
 if __name__ == "__main__":
     backbone = PART_mae_vit_base_patch16(pos_mask_ratio=0.4, mask_ratio=0.3)
-    x = torch.randn(2, 3, 224, 224)
+    x = torch.randn(1, 3, 224, 224).repeat(2, 1, 1, 1)
     params = torch.tensor([[0, 0, 224, 224], [0, 0, 224, 224]])
     patch_size = 16
     num_patches = (224 // patch_size) ** 2
     out = backbone.forward(x, params)
     print("Output keys:", out.keys())
     print(out["loss"])
-
-    # compute expected loss
-    best_T = torch.zeros_like(out["gt_intra_t"]) / 224
-    print(l1_loss(best_T, out["gt_intra_t"] / 224))
