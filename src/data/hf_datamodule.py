@@ -88,6 +88,7 @@ class HFDataModule(LightningDataModule):
         test_fraction: float = None,  # split val into val/test
         mixup: FastCollateMixup | None = None,
         output_tuple: bool = False,
+        prefetch_factor: int = 2,
         **load_dataset_kwargs,  # cache_dir, name, etc
     ) -> None:
         """Initialize a `HFDataModule`.
@@ -228,6 +229,7 @@ class HFDataModule(LightningDataModule):
             shuffle=True,
             collate_fn=collate_fn,
             drop_last=True,
+            prefetch_factor=self.hparams.prefetch_factor,
         )
 
     def val_dataloader(self) -> DataLoader[Any]:
@@ -245,6 +247,7 @@ class HFDataModule(LightningDataModule):
             pin_memory=self.hparams.pin_memory,
             shuffle=False,
             collate_fn=collate_fn,
+            prefetch_factor=self.hparams.prefetch_factor,
         )
 
     def test_dataloader(self) -> DataLoader[Any]:
@@ -262,6 +265,7 @@ class HFDataModule(LightningDataModule):
             pin_memory=self.hparams.pin_memory,
             shuffle=False,
             collate_fn=collate_fn,
+            prefetch_factor=self.hparams.prefetch_factor,
         )
 
 

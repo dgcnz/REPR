@@ -10,3 +10,4 @@ label_key: "label"
 batch_size: 16 # Needs to be divisible by the number of devices (e.g., if in a distributed setup)
 num_workers: 0
 pin_memory: True
+prefetch_factor: 2
