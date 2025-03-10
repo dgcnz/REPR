@@ -4051,8 +4051,10 @@ torchvision = "*"
 test = ["coverage[toml]", "pytest", "pytest-cov", "pytest-memray", "pytest-xdist"]
 
 [package.source]
-type = "directory"
-url = "../parameterized-transforms"
+type = "git"
+url = "https://github.com/dgcnz/parameterized-transforms"
+reference = "HEAD"
+resolved_reference = "06dd0ea40e52ba7597f5b87fb8bb91f5ecc763ba"
 
 [[package]]
 name = "parso"
@@ -7241,4 +7243,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "a8ba51458cca508764ac55fcd0304b5e5082de6e9096b960b89615f31396b297"
+content-hash = "aef89b4067547ac9277b38db9b613c114a55971e19e4f1202e637514f4d4f668"
