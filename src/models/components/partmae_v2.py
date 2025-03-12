@@ -43,19 +43,20 @@ SAMPLERS = {
 
 
 class PARTMaskedAutoEncoderViT(nn.Module):
-    """ 
+    """
     Self-supervised training by predicting distances between patches in an image.
-    
+
     CHANGELOG:
     - Masking makes pretext task more challenging and forces the model not to rely only on local information
     - Position embeddings are added:
         - They are dynamically computed based on the sampled coordinates.
-        - This reduces the pretraining vs finetuning discrepancy. 
+        - This reduces the pretraining vs finetuning discrepancy.
         - To prevent the model overrelying on them, some are masked. Only those tokens are used for prediction.
     - Deep decoder is added:
         - Avoids encoder to focus on learning good general representations, rather than pretext-specific ones.
         - Avoids low-frequency collapse on encoder representations.
-    """ 
+    """
+
     def __init__(
         self,
         # Encoder params
@@ -161,8 +162,10 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # initialization
         # initialize (and freeze) pos_embed by sin-cos embedding
         grid_size = _pair(self.img_size // self.patch_size)
-        pos_embed = get_canonical_pos_embed(self.embed_dim, grid_size, self.patch_size)
         cls_pos_embed = torch.zeros(1, 1, self.embed_dim)
+        pos_embed = get_canonical_pos_embed(
+            self.embed_dim, grid_size, self.patch_size, device=self.pos_embed.device
+        )
         self.pos_embed.data = torch.cat([cls_pos_embed, pos_embed], dim=1)
 
         # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
