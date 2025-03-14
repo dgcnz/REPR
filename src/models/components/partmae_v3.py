@@ -1,4 +1,5 @@
 import torch
+import math
 from torch import nn, Tensor
 from torch.nn.functional import mse_loss, l1_loss
 from timm.models.vision_transformer import Block
@@ -59,9 +60,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         decoder_embed_dim: int = 512,
         decoder_depth: int = 8,
         decoder_num_heads: int = 16,
-        # Prediction head outputs 4 numbers per patch:
-        # first 2 for translation; last 2 for log-scale.
-        num_targets: int = 4,
         # PART parameters
         sampler: str = "random",
         criterion: str = "l1",
@@ -71,7 +69,9 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         alpha_s: float = 0.75,  # weight between inter/intra scale
     ):
         super().__init__()
-        assert n_views > 1, "At least 2 views per image for inter-view comparison are required"
+        assert (
+            n_views > 1
+        ), "At least 2 views per image for inter-view comparison are required"
         self.n_views = n_views
         self.embed_dim = embed_dim
         self.img_size = img_size  # crop size
@@ -79,14 +79,12 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.patch_size = patch_size
         self.mask_ratio = mask_ratio
         self.pos_mask_ratio = pos_mask_ratio
-        self.num_targets = num_targets
         self.max_scale_ratio = max_scale_ratio
         self.alpha_ts = alpha_ts
         self.alpha_t = alpha_t
         self.alpha_s = alpha_s  # weight between inter/intra scale
 
         self.patch_embed = OffGridPatchEmbed(
-            img_size=img_size,  # note: patch embedding operates on the crop size
             patch_size=patch_size,
             in_chans=in_chans,
             embed_dim=embed_dim,
@@ -134,8 +132,9 @@ class PARTMaskedAutoEncoderViT(nn.Module):
                 for _ in range(decoder_depth)
             ]
         )
+        self.num_targets = 4
         self.decoder_norm = norm_layer(decoder_embed_dim)
-        self.decoder_pred = nn.Linear(decoder_embed_dim, num_targets, bias=False)
+        self.decoder_pred = nn.Linear(decoder_embed_dim, self.num_targets, bias=False)
         self.tanh = nn.Tanh()
         self.initialize_weights()
 
@@ -155,7 +154,9 @@ class PARTMaskedAutoEncoderViT(nn.Module):
 
     def initialize_weights(self):
         grid_size = _pair(self.img_size // self.patch_size)
-        pos_embed = get_canonical_pos_embed(self.embed_dim, grid_size, self.patch_size)
+        pos_embed = get_canonical_pos_embed(
+            self.embed_dim, grid_size, self.patch_size, device=self.pos_embed.device
+        )
         cls_pos_embed = torch.zeros(1, 1, self.embed_dim)
         self.pos_embed.data = torch.cat([cls_pos_embed, pos_embed], dim=1)
         nn.init.normal_(self.cls_token, std=0.02)
@@ -277,12 +278,16 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # --- Compute patch positions in canonical coordinates ---
         offset = params[..., :2]  # [B, V, 1, 2]
         size = params[..., 2:4]  # [B, V, 1, 2]
+        scale = size / crop_size  # [B, V, 1, 2]
         # gt_patch_positions: [B, V, N_nopos, 2]
-        gt_patch_positions = offset + (patch_positions_nopos / crop_size) * size
+        gt_patch_positions = offset + patch_positions_nopos * scale
 
-        # --- Compute log scale parameters ---
+        # --- Compute log scale for individual patches ---
+        # Each patch is self.patch_size x self.patch_size in the crop
+        # In canonical space, each patch spans patch_size * scale 
+        patch_canonical_size = self.patch_size * scale  # [B, V, 1, 2]
         # gt_log_hw: [B, V, N_nopos, 2]
-        gt_log_hw = torch.log(size).expand_as(gt_patch_positions)
+        gt_log_hw = torch.log(patch_canonical_size).expand_as(gt_patch_positions)
 
         # --- Stack positions and scales into a single representation ---
         # gt_pose [B, V, N_nopos, 4]
@@ -290,16 +295,16 @@ class PARTMaskedAutoEncoderViT(nn.Module):
 
         # --- Create source and target view representations ---
         # [B, 1, V, N_nopos, 1, 4]
-        pose_i = gt_pose.unsqueeze(1).unsqueeze(4)
+        pose_i = gt_pose.unsqueeze(1).unsqueeze(3)
         # [B, V, 1, 1, N_nopos, 4]
-        pose_j = gt_pose.unsqueeze(2).unsqueeze(3)
+        pose_j = gt_pose.unsqueeze(2).unsqueeze(4)
 
         # --- Compute differences in one go ---
-        gt_dT = pose_j - pose_i  # [B, V, V, N_nopos, N_nopos, 4]
+        gt_dT = pose_i - pose_j  # [B, V, V, N_nopos, N_nopos, 4]
 
-        # --- Normalize ---
+        # --- Normalize to [-1, 1] ---
         gt_dT[..., :2] /= canonical_size
-        gt_dT[..., 2:] /= self.max_scale_ratio
+        gt_dT[..., 2:] /= math.log(self.max_scale_ratio)
 
         return gt_dT
 
@@ -310,11 +315,11 @@ class PARTMaskedAutoEncoderViT(nn.Module):
           pred_dT: [B, V, V, N_nopos, N_nopos, 4]
         """
         # Create source (u) and target (v) view representations with one unsqueeze operation each
-        pose_u = pose_pred_nopos.unsqueeze(1).unsqueeze(4)  # [B, 1, V, N_nopos, 1, 4]
-        pose_v = pose_pred_nopos.unsqueeze(2).unsqueeze(3)  # [B, V, 1, 1, N_nopos, 4]
+        pose_u = pose_pred_nopos.unsqueeze(1).unsqueeze(3)  # [B, 1, V, N_nopos, 1, 4]
+        pose_v = pose_pred_nopos.unsqueeze(2).unsqueeze(4)  # [B, V, 1, 1, N_nopos, 4]
 
         # Compute differences for all transforms at once and apply tanh
-        pred_dT = self.tanh(pose_v - pose_u)  # [B, V, V, N_nopos, N_nopos, 4]
+        pred_dT = self.tanh(pose_u - pose_v)  # [B, V, V, N_nopos, N_nopos, 4]
         return pred_dT
 
     def _forward_loss(
@@ -331,49 +336,59 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         """
         # Compute the full inter-view predictions and ground truth
         pred_dT = self._compute_pred(pose_pred_nopos)  # [B, V, V, N_nopos, N_nopos, 4]
-        gt_dT = self._compute_gt(patch_positions_nopos, params)  # [B, V, V, N_nopos, N_nopos, 4]
-        
+        gt_dT = self._compute_gt(
+            patch_positions_nopos, params
+        )  # [B, V, V, N_nopos, N_nopos, 4]
+
         # Compute element-wise loss without reduction
-        loss_full = self.criterion(pred_dT, gt_dT, reduction='none')  # [B, V, V, N_nopos, N_nopos, 4]
-        
+        loss_full = self.criterion(
+            pred_dT, gt_dT, reduction="none"
+        )  # [B, V, V, N_nopos, N_nopos, 4]
+
         # Create masks for translation and scale components
         B, V = pose_pred_nopos.shape[:2]
         N_nopos = pose_pred_nopos.shape[2]
         device = pose_pred_nopos.device
-        
+
         # Create view relationship masks
-        diag_mask = torch.eye(V, device=device).view(1, V, V, 1, 1, 1)  # Intra-view (diagonal)
+        diag_mask = torch.eye(V, device=device).view(
+            1, V, V, 1, 1, 1
+        )  # Intra-view (diagonal)
         offdiag_mask = 1 - diag_mask  # Inter-view (off-diagonal)
-        
+
         # Precompute denominators for loss normalization
-        diag_denom = V * B * N_nopos * N_nopos * 2  # Total elements in diagonal masks after broadcasting
-        offdiag_denom = V * (V - 1) * B * N_nopos * N_nopos * 2  # Total elements in off-diagonal masks
-        
+        diag_denom = (
+            V * B * N_nopos * N_nopos * 2
+        )  # Total elements in diagonal masks after broadcasting
+        offdiag_denom = (
+            V * (V - 1) * B * N_nopos * N_nopos * 2
+        )  # Total elements in off-diagonal masks
+
         # Split losses for translation and scale
         # Translation = first 2 dimensions, Scale = last 2 dimensions
         loss_t_full = loss_full[..., :2]  # [B, V, V, N_nopos, N_nopos, 2]
         loss_s_full = loss_full[..., 2:]  # [B, V, V, N_nopos, N_nopos, 2]
-        
+
         # Calculate intra and inter view losses with proper masking
         # For translation
         masked_t_intra = loss_t_full * diag_mask
         loss_intra_t = masked_t_intra.sum() / diag_denom
-        
+
         masked_t_inter = loss_t_full * offdiag_mask
         loss_inter_t = masked_t_inter.sum() / offdiag_denom
-        
+
         # For scale
         masked_s_intra = loss_s_full * diag_mask
         loss_intra_s = masked_s_intra.sum() / diag_denom
-        
+
         masked_s_inter = loss_s_full * offdiag_mask
         loss_inter_s = masked_s_inter.sum() / offdiag_denom
-        
+
         # Combine losses with weightings
         loss_t = loss_inter_t * self.alpha_t + loss_intra_t * (1 - self.alpha_t)
         loss_s = loss_inter_s * self.alpha_s + loss_intra_s * (1 - self.alpha_s)
         loss = self.alpha_ts * loss_t + (1 - self.alpha_ts) * loss_s
-        
+
         return {
             "loss_intra_t": loss_intra_t,
             "loss_inter_t": loss_inter_t,
@@ -382,22 +397,23 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             "loss_t": loss_t,
             "loss_s": loss_s,
             "loss": loss,
+            "pred_dT": pred_dT,
+            "gt_dT": gt_dT,
         }
-
-    def forward(self, x: Tensor, params: Tensor):
-        """
-        Args:
-        x: [B*n_views, C, H, W] with n_views per image arranged consecutively.
-        params: [B*n_views, 4] augmentation parameters (y, x, h, w) for each view.
-        """
+    
+    
+    def forward(
+        self, x: Float[Tensor, "B V C H W"], params: Float[Tensor, "B V 8"]
+    ) -> dict:
         out = dict()
-        B_total, _, H, W = x.shape
+        (B, V, _, H, W) = x.shape
         assert H == W, "Input image must be square."
-        V, nT = self.n_views, self.num_targets
-        B = B_total // V
+        # First 4 params are for canonical crop, only needed for reproducing canonical crop (plotting)
+        # Next 4 are for augmented crops, needed for projecting to canonical space.
+        params = params[:, :, 4:8]
 
         # Run encoder and decoder.
-        out.update(self.forward_encoder(x))
+        out.update(self.forward_encoder(x.flatten(0, 1)))
         out.update(self.forward_decoder(out["z_enc"]))
 
         # Drop the positional tokens to use only masked tokens.
@@ -408,18 +424,17 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # Compute separated inter/intra loss.
         out.update(
             self._forward_loss(
-                pose_pred_nopos.view(B, V, -1, nT),  # [B, V, N_mask, 4]
-                patch_positions_nopos.view(B, V, -1, 2),  # [B, V, N_mask, 2]
-                params.view(B, V, 4),
+                pose_pred_nopos.unflatten(0, (B, V)),  # [B, V, N_mask, 4]
+                patch_positions_nopos.unflatten(0, (B, V)),  # [B, V, N_mask, 2]
+                params,  # [B, V, 4]
             )
         )
 
         return out
 
 
-def PART_mae_vit_base_patch16_dec512d8b(alpha_s=0.5, **kwargs):
+def PART_mae_vit_base_patch16_dec512d8b(**kwargs):
     model = PARTMaskedAutoEncoderViT(
-        n_views=2,
         patch_size=16,
         embed_dim=768,
         depth=12,
@@ -429,7 +444,6 @@ def PART_mae_vit_base_patch16_dec512d8b(alpha_s=0.5, **kwargs):
         decoder_num_heads=16,
         mlp_ratio=4,
         norm_layer=partial(nn.LayerNorm, eps=1e-6),
-        alpha_s=alpha_s,  # Add the new parameter
         **kwargs
     )
     return model
