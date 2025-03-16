@@ -1,6 +1,6 @@
 from torch.utils.data import Dataset
 from datasets import load_dataset
-
+import os
 
 class HFDataset(Dataset):
     def __init__(
@@ -11,7 +11,10 @@ class HFDataset(Dataset):
         img_key: str = "image",
         transform=None,
     ):
-        self.ds = load_dataset(dataset, name, split=split)
+        if "HF_HOME" in os.environ:
+            cache_dir = os.environ["HF_HOME"]
+            print(f"Using cache dir: {cache_dir}")
+        self.ds = load_dataset(dataset, name, split=split, cache_dir=cache_dir)
         self.transform = transform
         self.img_key = img_key
 

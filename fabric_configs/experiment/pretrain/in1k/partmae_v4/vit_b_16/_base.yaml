@@ -21,6 +21,9 @@ cudnn_benchmark: True
 trainer:
   max_epochs: ???
   accumulate_grad_batches: ???
+  num_nodes: 1
+  devices: 1
+
 
 # mae/droppose blr
 # blr: 1.5e-4
@@ -40,7 +43,7 @@ scheduler:
   t_initial: 200 # 800 epochs?
 
 optimizer:
-  lr: ${eval:${blr} * ${train_dataloader.batch_size} * ${trainer.accumulate_grad_batches} / 256}
+  lr: ${eval:${blr} * ${trainer.accumulate_grad_batches} * ${trainer.num_nodes} * ${trainer.devices} * ${train_dataloader.batch_size}  / 256}
   weight_decay: 0.05
 
 train_dataloader:
