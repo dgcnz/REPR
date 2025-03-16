@@ -61,6 +61,7 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
         callbacks=callbacks,
         loggers=loggers,
     )
+    fabric.launch()
 
     # Initialize datamodule
     log.info(f"Instantiating dataset <{cfg.data._target_}>")
@@ -173,7 +174,6 @@ def main(cfg: DictConfig) -> None:
 
     fabric, model, optimizer, scheduler, train_dataloader = setup(cfg)
 
-    fabric.launch()
 
     model, optimizer = fabric.setup(model, optimizer)
     train_dataloader = fabric.setup_dataloaders(train_dataloader)
