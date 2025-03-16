@@ -15,7 +15,6 @@ def reconstruct_positions_centered_torch_vectorized(pred_T: torch.Tensor) -> tor
     Args:
         pred_T: Tensor of shape [N, N, 2] containing predicted pairwise differences,
                 where ideally pred_T[i, j] ≈ T_j - T_i.
-                
     Returns:
         T: Tensor of shape [N, 2] representing the recovered patch positions,
            with a centering constraint (i.e. sum_i T_i = 0).

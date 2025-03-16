@@ -1,0 +1,5 @@
+_target_: torch.optim.AdamW
+_partial_: true
+lr: ... # adamw default: 1e-3
+weight_decay: ... # adamw default: 0.01
+eps: 1e-8 # adamw default: 1e-8

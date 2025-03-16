@@ -1,0 +1,7 @@
+defaults:
+- transform: basic_224
+
+_target_: src.data.components.hf_dataset.HFDataset
+dataset: "frgfm/imagenette"
+name: 160px
+img_key: "image"

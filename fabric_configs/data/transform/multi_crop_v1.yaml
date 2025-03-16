@@ -1,0 +1,9 @@
+_target_: src.data.components.transforms.multi_crop_v1.ParametrizedMultiCropV1
+canonical_size: 512
+canonical_crop_scale:
+  - 0.9
+  - 1.0
+global_crops_scale:
+  - 0.14
+  - 1.0
+n_views: 2

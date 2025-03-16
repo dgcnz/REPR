@@ -1,0 +1,7 @@
+defaults:
+- transform: basic_224
+
+_target_: src.data.components.hf_dataset.HFDataset
+dataset: "ILSVRC/imagenet-1k"
+name: null
+img_key: image

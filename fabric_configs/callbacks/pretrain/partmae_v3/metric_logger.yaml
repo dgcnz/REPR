@@ -1,0 +1,3 @@
+# @package callbacks
+metric_logger:
+  _target_: src.callbacks.pretrain.partmae_v3.metric_logger.MetricLogger

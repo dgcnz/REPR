@@ -1,0 +1,55 @@
+# @package _global_
+
+defaults:
+  - /scheduler: cosine
+  - /optimizer: adamw
+  - override /data: imagenette
+  - override /model: pretrain/partmae_v4/vit_b_16_224
+  - override /data/transform: multi_crop_v2
+  - override /callbacks:
+    - common/checkpoint
+    - pretrain/partmae_v3/metric_logger
+  - override /logger: wandb
+
+tags: ["pretrain", "imagenette", "partmae_v4", "vit_b_16"]
+
+seed: 12345
+float32_matmul_precision: "high"
+cudnn_benchmark: True
+
+
+trainer:
+  max_epochs: ???
+  accumulate_grad_batches: ???
+
+# mae/droppose blr
+# blr: 1.5e-4
+
+# dino blr
+# with gV=2, lV=10, this is effectively ~1.5e-4
+blr: 5e-4 
+
+model:
+  mask_ratio: 0.75
+  pos_mask_ratio: 0.75
+  sampler: stratified_jittered
+  criterion: l1
+
+scheduler:
+  warmup_t: 10 
+  t_initial: 200 # 800 epochs?
+
+optimizer:
+  lr: ${eval:${blr} * ${train_dataloader.batch_size} * ${trainer.accumulate_grad_batches} / 256}
+  weight_decay: 0.05
+
+train_dataloader:
+  pin_memory: true
+  batch_size: ???
+  num_workers: ???
+  drop_last: true
+
+logger:
+  wandb:
+    project: "PART-pretrain"
+    group: "imagenette/partmae_v4/vit_b_16"

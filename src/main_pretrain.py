@@ -34,6 +34,14 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
 
+    # Set float32 matmul precision
+    if cfg.get("float32_matmul_precision"):
+        torch.set_float32_matmul_precision(cfg.float32_matmul_precision)
+
+    # cuDNN optimization
+    if cfg.get("cudnn_benchmark", False):
+        cudnn.benchmark = True
+
     # Get checkpoint path from config if specified
     ckpt_path = cfg.get("ckpt_path", None)
 
@@ -55,37 +63,40 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
     )
 
     # Initialize datamodule
-    log.info(f"Instantiating datamodule <{cfg.data._target_}>")
-    datamodule = hydra.utils.instantiate(cfg.data)
-    datamodule.setup()
-
-    # Get train dataloader
-    train_dataloader = datamodule.train_dataloader()
+    log.info(f"Instantiating dataset <{cfg.data._target_}>")
+    dataset = hydra.utils.instantiate(cfg.data)
+    train_dataloader = torch.utils.data.DataLoader(
+        dataset,
+        **cfg.train_dataloader,
+    )
 
     # Initialize model with correct device and precision
-    log.info(f"Instantiating model <{cfg.model.net._target_}>")
+    log.info(f"Instantiating model <{cfg.model._target_}>")
 
     with fabric.init_module(empty_init=ckpt_path is not None):
-        model = hydra.utils.instantiate(cfg.model.net)
+        model = hydra.utils.instantiate(cfg.model)
+
+    if cfg.get("compile"):
+        model = torch.compile(model)
 
     # Initialize optimizer
-    log.info(f"Instantiating optimizer <{cfg.model.optimizer._target_}>")
-    optimizer = hydra.utils.instantiate(cfg.model.optimizer, params=model.parameters())()
+    log.info(f"Instantiating optimizer <{cfg.optimizer._target_}>")
+    optimizer = hydra.utils.instantiate(cfg.optimizer, params=model.parameters())()
 
     # Initialize scheduler
     scheduler = None
-    if "scheduler" in cfg.model:
-        log.info(f"Instantiating LR scheduler <{cfg.model.scheduler._target_}>")
-        scheduler = hydra.utils.instantiate(cfg.model.scheduler, optimizer=optimizer)
+    if "scheduler" in cfg:
+        log.info(f"Instantiating LR scheduler <{cfg.scheduler._target_}>")
+        scheduler = hydra.utils.instantiate(cfg.scheduler, optimizer=optimizer)()
 
     return fabric, model, optimizer, scheduler, train_dataloader
 
 
 def train(
     fabric: Fabric,
-    model: Any,
+    model: torch.nn.Module,
     train_dataloader: DataLoader,
-    optimizer: Any,
+    optimizer: torch.optim.Optimizer,
     scheduler: Optional[Any] = None,
     ckpt_path: Optional[str] = None,
     # Trainer arguments
@@ -159,12 +170,6 @@ def main(cfg: DictConfig) -> None:
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
-    # Set float32 matmul precision
-    if cfg.get("float32_matmul_precision"):
-        torch.set_float32_matmul_precision(cfg.float32_matmul_precision)
-
-    # cuDNN optimization
-    cudnn.benchmark = True
 
     fabric, model, optimizer, scheduler, train_dataloader = setup(cfg)
 
@@ -196,7 +201,7 @@ def main(cfg: DictConfig) -> None:
     )
 
 
-@hydra.main(version_base="1.3", config_path="../configs", config_name="train.yaml")
+@hydra.main(version_base="1.3", config_path="../fabric_configs", config_name="pretrain.yaml")
 def hydra_main(cfg: DictConfig) -> None:
     """Main entry point for training."""
     # Apply extra utilities

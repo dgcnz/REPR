@@ -44,7 +44,7 @@ def train_one_epoch(
 
     for batch_idx, batch in enumerate(pbar):
         # Forward pass
-        outputs = model(batch["image"])
+        outputs = model(*batch)
         loss = outputs["loss"]
 
         # Scale loss for gradient accumulation
@@ -62,7 +62,7 @@ def train_one_epoch(
             continue
 
         # Gradient clipping
-        if clip_grad > 0:
+        if clip_grad is not None and clip_grad > 0:
             fabric.clip_gradients(model, optimizer, max_norm=clip_grad)
 
         # Optimizer step

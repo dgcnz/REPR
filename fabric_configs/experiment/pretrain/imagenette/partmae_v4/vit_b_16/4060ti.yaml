@@ -1,0 +1,18 @@
+# @package _global_
+defaults:
+  - pretrain/imagenette/partmae_v4/vit_b_16/_base
+
+compile: True
+
+trainer:
+  max_epochs: 200
+  accelerator: gpu
+  # limit_train_batches: 128
+  accumulate_grad_batches: 8
+
+scheduler:
+  warmup_t: 10
+
+train_dataloader:
+  batch_size: 128
+  num_workers: 8

@@ -170,3 +170,4 @@ third-party/DropPos/log_dir
 third-party/DropPos/output_dir
 wandb/
 **.pth
+outputs
