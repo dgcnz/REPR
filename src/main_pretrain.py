@@ -187,18 +187,25 @@ def main(cfg: DictConfig) -> None:
 
     # Get checkpoint path from config
     ckpt_path = cfg.get("ckpt_path")
-
-    train(
-        fabric=fabric,
-        model=model,
-        optimizer=optimizer,
-        train_dataloader=train_dataloader,
-        max_epochs=cfg.trainer.get("max_epochs", 1000),
-        accumulate_grad_batches=cfg.trainer.get("accumulate_grad_batches", 1),
-        gradient_clip_val=cfg.trainer.get("gradient_clip_val", 0),
-        scheduler=scheduler,
-        ckpt_path=ckpt_path,
-    )
+    try:
+        train(
+            fabric=fabric,
+            model=model,
+            optimizer=optimizer,
+            train_dataloader=train_dataloader,
+            max_epochs=cfg.trainer.get("max_epochs", 1000),
+            accumulate_grad_batches=cfg.trainer.get("accumulate_grad_batches", 1),
+            gradient_clip_val=cfg.trainer.get("gradient_clip_val", 0),
+            scheduler=scheduler,
+            ckpt_path=ckpt_path,
+        )
+    except Exception as e:
+        log.error(f"Training failed with error: {e}")
+        raise e
+    finally:
+        if wandb.run:
+            log.info("Closing wandb!")
+            wandb.finish()
 
 
 @hydra.main(version_base="1.3", config_path="../fabric_configs", config_name="pretrain.yaml")
