@@ -2,7 +2,7 @@
 defaults:
   - pretrain/in1k/partmae_v4/vit_b_16/_base
 
-compile: True
+compile: False
 
 trainer:
   max_epochs: 200

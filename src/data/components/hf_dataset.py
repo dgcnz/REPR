@@ -14,6 +14,8 @@ class HFDataset(Dataset):
         if "HF_HOME" in os.environ:
             cache_dir = os.environ["HF_HOME"]
             print(f"Using cache dir: {cache_dir}")
+        else:
+            cache_dir = None
         self.ds = load_dataset(dataset, name, split=split, cache_dir=cache_dir)
         self.transform = transform
         self.img_key = img_key
