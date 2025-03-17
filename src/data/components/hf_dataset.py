@@ -1,6 +1,7 @@
 from torch.utils.data import Dataset
 from datasets import load_dataset
 import os
+import warnings
 
 class HFDataset(Dataset):
     def __init__(
@@ -11,6 +12,8 @@ class HFDataset(Dataset):
         img_key: str = "image",
         transform=None,
     ):
+        warnings.filterwarnings("ignore", "(Possibly )?corrupt EXIF data", UserWarning)
+
         if "HF_HOME" in os.environ:
             cache_dir = os.environ["HF_HOME"]
             print(f"Using cache dir: {cache_dir}")
