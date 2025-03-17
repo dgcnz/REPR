@@ -68,6 +68,7 @@ class MetricLogger(object):
         self._log(fabric, global_step, train_metrics)
         log.info(f"Metrics logged.")
 
+        fabric.barrier()
         log.info(f"Resetting metrics...")
         metric_collection.reset()
         log.info(f"Metrics reset.")
