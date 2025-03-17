@@ -47,7 +47,6 @@ def train_one_epoch(
     }
     with tqdm(data_loader, **tqdm_kwargs) as pbar:
         for batch_idx, batch in enumerate(pbar):
-            log.info(f"Processing batch {batch_idx}...")
             # Forward pass
             outputs = model(*batch)
             loss = outputs["loss"]
@@ -88,8 +87,8 @@ def train_one_epoch(
             )
 
             global_step += 1
-            log.info(f"Processed batch {batch_idx}.")   
 
+    log.info(f"Epoch {epoch} ended.")   
     fabric.call(
         "on_train_epoch_end",
         fabric=fabric,
@@ -101,9 +100,11 @@ def train_one_epoch(
         metric_collection=metric_collection,
     )
 
+    log.info(f"Scheduler step {epoch}.")   
     # Update epoch-based scheduler
     if scheduler is not None:
         scheduler.step(epoch=epoch)
 
+    log.info(f"Finished train_one_epoch {epoch}.")   
     # Return the updated global step
     return global_step
