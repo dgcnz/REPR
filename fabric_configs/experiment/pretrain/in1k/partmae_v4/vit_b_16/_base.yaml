@@ -30,7 +30,7 @@ trainer:
 
 # dino blr
 # with gV=2, lV=10, this is effectively ~1.5e-4
-blr: 5e-4 
+blr: 1.5e-4 
 
 model:
   mask_ratio: 0.75
@@ -41,6 +41,7 @@ model:
 scheduler:
   warmup_t: 10 
   t_initial: 200 # 800 epochs?
+  warmup_lr_init: 1e-4
 
 optimizer:
   lr: ${eval:${blr} * ${trainer.accumulate_grad_batches} * ${trainer.num_nodes} * ${trainer.devices} * ${train_dataloader.batch_size}  / 256}
