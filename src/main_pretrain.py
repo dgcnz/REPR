@@ -5,6 +5,7 @@ import rootutils
 from omegaconf import DictConfig, OmegaConf
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any
+from torchmetrics import Metric
 
 import lightning as L
 from lightning import Fabric
@@ -77,6 +78,8 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
     with fabric.init_module(empty_init=ckpt_path is not None):
         model = hydra.utils.instantiate(cfg.model)
 
+    metric_collection = hydra.utils.instantiate(cfg.metric_collection)
+
     if cfg.get("compile"):
         model = torch.compile(model)
 
@@ -90,13 +93,14 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
         log.info(f"Instantiating LR scheduler <{cfg.scheduler._target_}>")
         scheduler = hydra.utils.instantiate(cfg.scheduler, optimizer=optimizer)()
 
-    return fabric, model, optimizer, scheduler, train_dataloader
+    return fabric, model, optimizer, scheduler, train_dataloader, metric_collection
 
 
 def train(
     fabric: Fabric,
     model: torch.nn.Module,
     train_dataloader: DataLoader,
+    metric_collection: Metric,
     optimizer: torch.optim.Optimizer,
     scheduler: Optional[Any] = None,
     ckpt_path: Optional[str] = None,
@@ -125,6 +129,7 @@ def train(
         "on_train_start",
         fabric=fabric,
         model=model,
+        metric_collection=metric_collection,
         epoch=start_epoch,
         global_step=global_step,
         optimizer=optimizer,
@@ -144,24 +149,26 @@ def train(
             model=model,
             data_loader=train_dataloader,
             optimizer=optimizer,
+            metric_collection=metric_collection,
             epoch=epoch,
             global_step=global_step,
             scheduler=scheduler,
             accum_iter=accumulate_grad_batches,
             clip_grad=gradient_clip_val,
         )
-    
+
     # Call on_train_end at the end of training to save final checkpoint
     fabric.call(
         "on_train_end",
         fabric=fabric,
         model=model,
+        metric_collection=metric_collection,
         epoch=max_epochs - 1,  # Use the last epoch index
         global_step=global_step,
         optimizer=optimizer,
         scheduler=scheduler,
     )
-    
+
     log.info("Training completed!")
 
 
@@ -171,11 +178,12 @@ def main(cfg: DictConfig) -> None:
     if not os.path.exists(output_dir):
         os.makedirs(output_dir, exist_ok=True)
 
-
-    fabric, model, optimizer, scheduler, train_dataloader = setup(cfg)
-
+    fabric, model, optimizer, scheduler, train_dataloader, metric_collection = setup(
+        cfg
+    )
 
     model, optimizer = fabric.setup(model, optimizer)
+    metric_collection = metric_collection.to(fabric.device)
     train_dataloader = fabric.setup_dataloaders(train_dataloader)
 
     # Print configuration with fabric
@@ -193,6 +201,7 @@ def main(cfg: DictConfig) -> None:
             model=model,
             optimizer=optimizer,
             train_dataloader=train_dataloader,
+            metric_collection=metric_collection,
             max_epochs=cfg.trainer.get("max_epochs", 1000),
             accumulate_grad_batches=cfg.trainer.get("accumulate_grad_batches", 1),
             gradient_clip_val=cfg.trainer.get("gradient_clip_val", 0),
@@ -208,7 +217,9 @@ def main(cfg: DictConfig) -> None:
             wandb.finish()
 
 
-@hydra.main(version_base="1.3", config_path="../fabric_configs", config_name="pretrain.yaml")
+@hydra.main(
+    version_base="1.3", config_path="../fabric_configs", config_name="pretrain.yaml"
+)
 def hydra_main(cfg: DictConfig) -> None:
     """Main entry point for training."""
     # Apply extra utilities

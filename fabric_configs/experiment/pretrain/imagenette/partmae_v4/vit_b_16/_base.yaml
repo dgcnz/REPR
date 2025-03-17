@@ -8,7 +8,7 @@ defaults:
   - override /data/transform: multi_crop_v2
   - override /callbacks:
     - common/checkpoint
-    - pretrain/partmae_v3/metric_logger
+    - common/metric_logger
   - override /logger: wandb
 
 tags: ["pretrain", "imagenette", "partmae_v4", "vit_b_16"]
@@ -50,6 +50,9 @@ train_dataloader:
   batch_size: ???
   num_workers: ???
   drop_last: true
+
+metric_collection:
+  _target_: src.models.components.metrics.partmae_v3.V3Metrics
 
 logger:
   wandb:

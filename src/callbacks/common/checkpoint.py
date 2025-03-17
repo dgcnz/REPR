@@ -44,6 +44,7 @@ class ModelCheckpoint(object):
         global_step: int,
         optimizer: torch.optim.Optimizer,
         scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+        **kwargs,
     ) -> None:
         """Save checkpoint after training epoch if configured."""
         if fabric.is_global_zero:
