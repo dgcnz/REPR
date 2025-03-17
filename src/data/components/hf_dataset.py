@@ -1,5 +1,5 @@
 from torch.utils.data import Dataset
-from datasets import load_dataset
+import datasets
 import os
 import warnings
 
@@ -17,7 +17,9 @@ class HFDataset(Dataset):
 
         if "HF_HOME" in os.environ:
             kwargs["cache_dir"] = os.environ["HF_HOME"]
-        self.ds = load_dataset(dataset, name, split=split, **kwargs)
+        if "IN_MEMORY_MAX_SIZE" in os.environ:
+            datasets.config.IN_MEMORY_MAX_SIZE = int(os.environ["IN_MEMORY_MAX_SIZE"])
+        self.ds = datasets.load_dataset(dataset, name, split=split, **kwargs)
         self.transform = transform
         self.img_key = img_key
 
