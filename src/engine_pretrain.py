@@ -43,11 +43,11 @@ def train_one_epoch(
     tqdm_kwargs = {
         "total": len(data_loader),
         "desc": f"Epoch {epoch}",
-        "leave": False,
         "disable": not fabric.is_global_zero, # Only show progress bar on global zero
     }
     with tqdm(data_loader, **tqdm_kwargs) as pbar:
         for batch_idx, batch in enumerate(pbar):
+            log.info(f"Processing batch {batch_idx}...")
             # Forward pass
             outputs = model(*batch)
             loss = outputs["loss"]
@@ -88,6 +88,7 @@ def train_one_epoch(
             )
 
             global_step += 1
+            log.info(f"Processed batch {batch_idx}.")   
 
     fabric.call(
         "on_train_epoch_end",
