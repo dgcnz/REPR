@@ -53,22 +53,8 @@ class MetricLogger(object):
         metric_collection: Metric,
         **kwargs,
     ) -> None:
-        """Log summary metrics at the end of each training epoch."""
-        ## BUG: I think that since this callback is instantiated before
-        ## fabric.launch() and that its not called in fabric.setup_model(),
-        ## the metric tensors are not really ddp tensors, which causes
-        ## comm issues in compute()
-        
-        log.info(f"Computing epoch {epoch} metrics...")
         final_metrics: dict = metric_collection.compute()
-        log.info(f"Metrics: {final_metrics}")
         train_metrics = {f"train/{k}": v for k, v in final_metrics.items()}
         train_metrics["epoch"] = epoch
-        log.info(f"Logging metrics...")
         self._log(fabric, global_step, train_metrics)
-        log.info(f"Metrics logged.")
-
-        # fabric.barrier()
-        log.info(f"Resetting metrics...")
         metric_collection.reset()
-        log.info(f"Metrics reset.")

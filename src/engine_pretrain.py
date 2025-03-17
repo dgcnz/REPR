@@ -31,8 +31,7 @@ def train_one_epoch(
     optimizer.zero_grad()
 
     # Wrap data loader with progress bar
-    
-    log.info(f"on_train_epoch_start {epoch}")
+    log.debug(f"on_train_epoch_start {epoch}")
     fabric.call(
         "on_train_epoch_start",
         fabric=fabric,
@@ -44,9 +43,8 @@ def train_one_epoch(
     tqdm_kwargs = {
         "total": len(data_loader),
         "desc": f"Epoch {epoch}",
-        "disable": not fabric.is_global_zero, # Only show progress bar on global zero
+        "disable": not fabric.is_global_zero,  # Only show progress bar on global zero
     }
-    log.info(f"tqdm {epoch}")
     with tqdm(data_loader, **tqdm_kwargs) as pbar:
         for batch_idx, batch in enumerate(pbar):
             # Forward pass
@@ -90,7 +88,7 @@ def train_one_epoch(
 
             global_step += 1
 
-    log.info(f"Epoch {epoch} ended.")   
+    log.debug(f"Epoch {epoch} ended.")
     fabric.call(
         "on_train_epoch_end",
         fabric=fabric,
@@ -102,11 +100,9 @@ def train_one_epoch(
         metric_collection=metric_collection,
     )
 
-    log.info(f"Scheduler step {epoch}.")   
-    # Update epoch-based scheduler
+    log.debug(f"Scheduler step {epoch}.")
     if scheduler is not None:
         scheduler.step(epoch=epoch)
 
-    log.info(f"Finished train_one_epoch {epoch}.")   
-    # Return the updated global step
+    log.debug(f"Finished train_one_epoch {epoch}.")
     return global_step

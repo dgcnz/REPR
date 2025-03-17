@@ -3,6 +3,7 @@
 
 import os
 import torch
+import sys
 import wandb
 from typing import Any, Dict, Optional, Union
 from pathlib import Path
@@ -49,14 +50,6 @@ def save_checkpoint(
     if scheduler is not None:
         checkpoint["scheduler"] = scheduler
     
-    # Save wandb run ID in checkpoint if available
-    if wandb.run is not None:
-        checkpoint["wandb_run_id"] = wandb.run.id
-    
-    # Save any additional items provided
-    for key, value in kwargs.items():
-        checkpoint[key] = value
-    
     # Save the checkpoint
     fabric.save(filepath, checkpoint)
     
@@ -88,59 +81,19 @@ def load_checkpoint(
         Dictionary containing checkpoint metadata and any extra stored values
     """
     if not os.path.exists(checkpoint_path):
-        if verbose:
-            log.info(f"No checkpoint found at {checkpoint_path}")
-        return {"epoch": 0, "global_step": 0}
+        log.info(f"No checkpoint found at {checkpoint_path}")
+        sys.exit(0)
     
-    if verbose:
-        log.info(f"Loading checkpoint from {checkpoint_path}")
+    log.info(f"Loading checkpoint from {checkpoint_path}")
     
-    checkpoint = fabric.load(checkpoint_path)
+    state = {
+        "model": model,
+        "optimizer": optimizer,
+        "scheduler": scheduler,
+    }
     
-    # Load model state
-    model_unwrapped = _unwrap_objects(model)
-    model_unwrapped.load_state_dict(checkpoint["model"], strict=strict)
-    
-    # Load optimizer state if available and optimizer is provided
-    if optimizer is not None and "optimizer" in checkpoint:
-        try:
-            optimizer_unwrapped = _unwrap_objects(optimizer)
-            optimizer_unwrapped.load_state_dict(checkpoint["optimizer"])
-            if verbose:
-                log.info("Loaded optimizer state")
-        except Exception as e:
-            log.warning(f"Failed to load optimizer state: {e}")
-    
-    # Load scheduler state if available and scheduler is provided
-    if scheduler is not None and "scheduler" in checkpoint:
-        try:
-            scheduler_unwrapped = _unwrap_objects(scheduler)
-            scheduler_unwrapped.load_state_dict(checkpoint["scheduler"])
-            if verbose:
-                log.info("Loaded scheduler state")
-        except Exception as e:
-            log.warning(f"Failed to load scheduler state: {e}")
-    
-    # Initialize wandb with the same run if we have a run ID
-    if "wandb_run_id" in checkpoint and fabric.global_rank == 0:
-        current_run_id = wandb.run.id if wandb.run else None
-        if current_run_id != checkpoint["wandb_run_id"]:
-            log.info(f"Previous run ID: {checkpoint['wandb_run_id']}, current: {current_run_id}")
-    
-    if verbose:
-        log.info(f"Loaded checkpoint from {checkpoint_path}")
-        if "epoch" in checkpoint:
-            log.info(f"Resuming from epoch {checkpoint['epoch']}")
-        if "global_step" in checkpoint:
-            log.info(f"Resuming from global step {checkpoint['global_step']}")
-    
-    # Make sure we have at least empty defaults
-    if "epoch" not in checkpoint:
-        checkpoint["epoch"] = 0
-    if "global_step" not in checkpoint:
-        checkpoint["global_step"] = 0
-        
-    return checkpoint
+    remainder = fabric.load(checkpoint_path, state, strict=strict)
+    return remainder
 
 
 def find_latest_checkpoint(

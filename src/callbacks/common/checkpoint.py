@@ -76,9 +76,6 @@ class ModelCheckpoint(object):
                 verbose=False,  # Use less verbose output for ephemeral checkpoint
             )
             log.info(f"Saved checkpoint: {last_filepath}")
-        log.info(f"Waiting for global zero to finish saving checkpoint... ep:{epoch}, r:{fabric.is_global_zero}") 
-        fabric.barrier(f"checkpoint:on_train_epoch_end:{epoch}")
-        log.info(f"Global zero finished saving checkpoint. ep:{epoch}, r:{fabric.is_global_zero}")
 
     def on_train_end(
         self,

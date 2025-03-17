@@ -139,12 +139,10 @@ def train(
     log.info(f"Starting training for {max_epochs} epochs from epoch {start_epoch}")
 
     for epoch in range(start_epoch, max_epochs):
-        # Set epoch for distributed samplers
-        log.info(f"dataloader sampler: {epoch}")
         if hasattr(train_dataloader.sampler, "set_epoch"):
             train_dataloader.sampler.set_epoch(epoch)
 
-        log.info(f"train_one_epoch {epoch}")
+        log.debug(f"train_one_epoch {epoch} ... ")
         # Train for one epoch and get updated global step
         global_step = train_one_epoch(
             fabric=fabric,
@@ -158,7 +156,7 @@ def train(
             accum_iter=accumulate_grad_batches,
             clip_grad=gradient_clip_val,
         )
-        log.info(f"train_one_epoch {epoch} done")
+        log.debug(f"train_one_epoch {epoch} done")
 
     # Call on_train_end at the end of training to save final checkpoint
     fabric.call(
