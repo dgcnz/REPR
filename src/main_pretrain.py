@@ -65,7 +65,7 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
 
     for logger in fabric._loggers:
         logger.log_hyperparams(cfg)
-    
+
     fabric.launch()
 
     # Initialize datamodule
@@ -85,6 +85,8 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
     metric_collection = hydra.utils.instantiate(cfg.metric_collection)
 
     if cfg.get("compile"):
+        torch._dynamo.config.optimize_ddp = False
+        # Disable ddp optimization
         model = torch.compile(model)
 
     # Initialize optimizer
@@ -96,7 +98,6 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
     if "scheduler" in cfg:
         log.info(f"Instantiating LR scheduler <{cfg.scheduler._target_}>")
         scheduler = hydra.utils.instantiate(cfg.scheduler, optimizer=optimizer)()
-
 
     return fabric, model, optimizer, scheduler, train_dataloader, metric_collection
 

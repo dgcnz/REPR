@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - pretrain/in1k/partmae_v4/vit_b_16/_base
+
+compile: True
+
+trainer:
+  max_epochs: 200
+  accelerator: gpu
+  num_nodes: 1
+  devices: 1
+  accumulate_grad_batches: 2
+
+scheduler:
+  warmup_t: 10
+
+train_dataloader:
+  batch_size: 512
+  num_workers: 16
