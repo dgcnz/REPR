@@ -2,7 +2,9 @@ from typing import Any, Dict
 import torch
 from lightning import Fabric
 from torchmetrics import MeanMetric
+from src.utils import pylogger
 
+log = pylogger.RankedLogger(__name__)
 
 class MetricLogger(object):
     """Callback for tracking and logging metrics specific to PART-MAE-v3."""
@@ -75,7 +77,9 @@ class MetricLogger(object):
         self, fabric: Fabric, global_step: int, epoch: int, **kwargs
     ) -> None:
         """Log summary metrics at the end of each training epoch."""
+        log.info(f"Computing epoch {epoch} metrics...")
         final_metrics = self.get_current_metrics()
+        log.info(f"Metrics: {final_metrics}")
         train_metrics = {f"train/{k}": v for k, v in final_metrics.items()}
         train_metrics["epoch"] = epoch
 
