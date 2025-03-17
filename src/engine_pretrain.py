@@ -1,8 +1,9 @@
 from typing import Any, Dict, Iterable, Optional
 
+from torch import Tensor, nn
 import torch
-import torch.nn.functional as F
 from lightning import Fabric
+from lightning.fabric.utilities.apply_func import apply_to_collection
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from torchmetrics import Metric
@@ -14,7 +15,7 @@ log = pylogger.RankedLogger(__name__)
 
 def train_one_epoch(
     fabric: Fabric,
-    model: torch.nn.Module,
+    model: nn.Module,
     data_loader: DataLoader,
     metric_collection: Metric,
     optimizer: torch.optim.Optimizer,
@@ -60,6 +61,8 @@ def train_one_epoch(
             # Backward pass with no_backward_sync when not taking optimizer step
             with fabric.no_backward_sync(model, enabled=not is_optim_step):
                 fabric.backward(loss)
+
+            outputs = apply_to_collection(outputs, Tensor, lambda x: x.detach())
 
             # Skip optimizer step if we're still accumulating
             if not is_optim_step:

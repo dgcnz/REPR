@@ -2,7 +2,7 @@
 from torchmetrics import MeanMetric, Metric
 from torchmetrics.wrappers.abstract import WrapperMetric
 from torch import nn, Tensor
-
+import torch
 
 class V3Metrics(WrapperMetric):
     metrics: dict[str, Metric]
@@ -26,6 +26,7 @@ class V3Metrics(WrapperMetric):
             }
         )
 
+    @torch.no_grad()
     def update(self, outputs: dict[str, Tensor]):
         """Update metrics from model outputs."""
         for k in self.metrics:
