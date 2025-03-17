@@ -46,36 +46,36 @@ class ModelCheckpoint(object):
         scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
     ) -> None:
         """Save checkpoint after training epoch if configured."""
-        if not fabric.is_global_zero:
-            return
-        # Save permanent epoch checkpoint
-        if (epoch + 1) % self.every_n_epochs == 0:
-            periodic_filepath = os.path.join(self.dirpath, f"epoch_{epoch:04d}.ckpt")
-            checkpointer.save_checkpoint(
-                fabric=fabric,
-                model=model,
-                optimizer=optimizer,
-                epoch=epoch,
-                global_step=global_step,
-                filepath=periodic_filepath,
-                scheduler=scheduler,
-                verbose=self.verbose,
-            )
+        if fabric.is_global_zero:
+            # Save permanent epoch checkpoint
+            if (epoch + 1) % self.every_n_epochs == 0:
+                periodic_filepath = os.path.join(self.dirpath, f"epoch_{epoch:04d}.ckpt")
+                checkpointer.save_checkpoint(
+                    fabric=fabric,
+                    model=model,
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    global_step=global_step,
+                    filepath=periodic_filepath,
+                    scheduler=scheduler,
+                    verbose=self.verbose,
+                )
 
-        # Save ephemeral "last" checkpoint if configured
-        if self.save_last:
-            last_filepath = os.path.join(self.dirpath, "last.ckpt")
-            checkpointer.save_checkpoint(
-                fabric=fabric,
-                model=model,
-                optimizer=optimizer,
-                epoch=epoch,
-                global_step=global_step,
-                filepath=last_filepath,
-                scheduler=scheduler,
-                verbose=False,  # Use less verbose output for ephemeral checkpoint
-            )
-            log.info(f"Saved checkpoint: {last_filepath}")
+            # Save ephemeral "last" checkpoint if configured
+            if self.save_last:
+                last_filepath = os.path.join(self.dirpath, "last.ckpt")
+                log.info(f"Saving last checkpoint to {last_filepath}")
+                checkpointer.save_checkpoint(
+                    fabric=fabric,
+                    model=model,
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    global_step=global_step,
+                    filepath=last_filepath,
+                    scheduler=scheduler,
+                    verbose=False,  # Use less verbose output for ephemeral checkpoint
+                )
+                log.info(f"Saved checkpoint: {last_filepath}")
 
     def on_train_end(
         self,

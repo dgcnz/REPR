@@ -12,18 +12,18 @@ class MetricLogger(object):
     def __init__(self):
         """Initialize the PART-MAE-v3 metric logger."""
         self.metrics = {
-            "loss_intra_t": MeanMetric(),
-            "loss_inter_t": MeanMetric(),
-            "loss_intra_s": MeanMetric(),
-            "loss_inter_s": MeanMetric(),
-            "loss_t": MeanMetric(),
-            "loss_s": MeanMetric(),
-            "loss": MeanMetric(),
+            "loss_intra_t": MeanMetric(sync_on_compute=False),
+            "loss_inter_t": MeanMetric(sync_on_compute=False),
+            "loss_intra_s": MeanMetric(sync_on_compute=False),
+            "loss_inter_s": MeanMetric(sync_on_compute=False),
+            "loss_t": MeanMetric(sync_on_compute=False),
+            "loss_s": MeanMetric(sync_on_compute=False),
+            "loss": MeanMetric(sync_on_compute=False),
             ### non-loss
-            "pred_dt_std": MeanMetric(),
-            "pred_ds_std": MeanMetric(),
-            "gt_dt_std": MeanMetric(),
-            "gt_ds_std": MeanMetric(),
+            "pred_dt_std": MeanMetric(sync_on_compute=False),
+            "pred_ds_std": MeanMetric(sync_on_compute=False),
+            "gt_dt_std": MeanMetric(sync_on_compute=False),
+            "gt_ds_std": MeanMetric(sync_on_compute=False),
         }
 
     def on_train_start(self, fabric: Fabric, **kwargs) -> None:
