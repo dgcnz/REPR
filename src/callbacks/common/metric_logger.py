@@ -21,7 +21,7 @@ class MetricLogger(object):
     def _log(self, fabric: Fabric, global_step: int, metrics: dict[str, Any]):
         if fabric.is_global_zero:
             fabric.log_dict(metrics, step=global_step)
-        fabric.barrier()
+        fabric.barrier(f"metric_logger:_log:{global_step}")
 
     def _log_lr(
         self, fabric: Fabric, global_step: int, optimizer: torch.optim.Optimizer
@@ -68,7 +68,7 @@ class MetricLogger(object):
         self._log(fabric, global_step, train_metrics)
         log.info(f"Metrics logged.")
 
-        fabric.barrier()
+        # fabric.barrier()
         log.info(f"Resetting metrics...")
         metric_collection.reset()
         log.info(f"Metrics reset.")

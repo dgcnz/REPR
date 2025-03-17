@@ -77,7 +77,7 @@ class ModelCheckpoint(object):
                     verbose=False,  # Use less verbose output for ephemeral checkpoint
                 )
                 log.info(f"Saved checkpoint: {last_filepath}")
-        fabric.barrier()
+        fabric.barrier(f"checkpoint:on_train_epoch_end:{epoch}")
 
     def on_train_end(
         self,
@@ -104,4 +104,4 @@ class ModelCheckpoint(object):
             )
 
             log.info(f"Training completed. Final checkpoint saved to {final_filepath}")
-        fabric.barrier()
+        fabric.barrier(f"checkpoint:on_train_end")
