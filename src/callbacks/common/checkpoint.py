@@ -46,6 +46,8 @@ class ModelCheckpoint(object):
         scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
     ) -> None:
         """Save checkpoint after training epoch if configured."""
+        if not fabric.is_global_zero:
+            return
         # Save permanent epoch checkpoint
         if (epoch + 1) % self.every_n_epochs == 0:
             periodic_filepath = os.path.join(self.dirpath, f"epoch_{epoch:04d}.ckpt")
@@ -73,6 +75,7 @@ class ModelCheckpoint(object):
                 scheduler=scheduler,
                 verbose=False,  # Use less verbose output for ephemeral checkpoint
             )
+            log.info(f"Saved checkpoint: {last_filepath}")
 
     def on_train_end(
         self,
@@ -85,6 +88,8 @@ class ModelCheckpoint(object):
         **kwargs,
     ) -> None:
         """Save the final checkpoint at the end of training."""
+        if not fabric.is_global_zero:
+            return
         final_filepath = os.path.join(self.dirpath, "last.ckpt")
         checkpointer.save_checkpoint(
             fabric=fabric,

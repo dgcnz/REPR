@@ -38,7 +38,7 @@ def save_checkpoint(
         scheduler: Optional learning rate scheduler to save
         **kwargs: Additional items to save in the checkpoint
     """
-    if fabric.global_rank != 0:
+    if not fabric.is_global_zero:
         return
         
     model_unwrapped = _unwrap_objects(model)
