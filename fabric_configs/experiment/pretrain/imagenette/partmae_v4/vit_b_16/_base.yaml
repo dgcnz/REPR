@@ -53,6 +53,7 @@ train_dataloader:
 
 metric_collection:
   _target_: src.models.components.metrics.partmae_v3.V3Metrics
+  sync_on_compute: false
 
 logger:
   wandb:

@@ -7,22 +7,22 @@ from torch import nn, Tensor
 class V3Metrics(WrapperMetric):
     metrics: dict[str, Metric]
 
-    def __init__(self):
+    def __init__(self, **metric_kwargs):
         super().__init__()
         self.metrics = nn.ModuleDict(
             {
-                "loss_intra_t": MeanMetric(),
-                "loss_inter_t": MeanMetric(),
-                "loss_intra_s": MeanMetric(),
-                "loss_inter_s": MeanMetric(),
-                "loss_t": MeanMetric(),
-                "loss_s": MeanMetric(),
-                "loss": MeanMetric(),
+                "loss_intra_t": MeanMetric(**metric_kwargs),
+                "loss_inter_t": MeanMetric(**metric_kwargs),
+                "loss_intra_s": MeanMetric(**metric_kwargs),
+                "loss_inter_s": MeanMetric(**metric_kwargs),
+                "loss_t": MeanMetric(**metric_kwargs),
+                "loss_s": MeanMetric(**metric_kwargs),
+                "loss": MeanMetric(**metric_kwargs),
                 ### non-loss
-                "pred_dt_std": MeanMetric(),
-                "pred_ds_std": MeanMetric(),
-                "gt_dt_std": MeanMetric(),
-                "gt_ds_std": MeanMetric(),
+                "pred_dt_std": MeanMetric(**metric_kwargs),
+                "pred_ds_std": MeanMetric(**metric_kwargs),
+                "gt_dt_std": MeanMetric(**metric_kwargs),
+                "gt_ds_std": MeanMetric(**metric_kwargs),
             }
         )
 
