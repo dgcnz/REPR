@@ -77,13 +77,20 @@ class MetricLogger(object):
         self, fabric: Fabric, global_step: int, epoch: int, **kwargs
     ) -> None:
         """Log summary metrics at the end of each training epoch."""
-        log.info(f"Computing epoch {epoch} metrics...")
-        final_metrics = self.get_current_metrics()
-        log.info(f"Metrics: {final_metrics}")
-        train_metrics = {f"train/{k}": v for k, v in final_metrics.items()}
-        train_metrics["epoch"] = epoch
+        ## BUG: I think that since this callback is instantiated before
+        ## fabric.launch() and that its not called in fabric.setup_model(),
+        ## the metric tensors are not really ddp tensors, which causes
+        ## comm issues in compute()
+        ## Temporary fix, only compute and log metrics on global zero
+        if fabric.is_global_zero:
+            log.info(f"Computing epoch {epoch} metrics...")
+            final_metrics = self.get_current_metrics()
+            log.info(f"Metrics: {final_metrics}")
+            train_metrics = {f"train/{k}": v for k, v in final_metrics.items()}
+            train_metrics["epoch"] = epoch
 
-        self._log(fabric, global_step, train_metrics)
+            self._log(fabric, global_step, train_metrics)
 
+        log.info(f"Resetting metrics...")
         for k in self.metrics:
             self.metrics[k].reset()
