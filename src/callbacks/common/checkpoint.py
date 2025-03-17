@@ -77,6 +77,7 @@ class ModelCheckpoint(object):
                     verbose=False,  # Use less verbose output for ephemeral checkpoint
                 )
                 log.info(f"Saved checkpoint: {last_filepath}")
+        fabric.barrier()
 
     def on_train_end(
         self,
@@ -89,18 +90,18 @@ class ModelCheckpoint(object):
         **kwargs,
     ) -> None:
         """Save the final checkpoint at the end of training."""
-        if not fabric.is_global_zero:
-            return
-        final_filepath = os.path.join(self.dirpath, "last.ckpt")
-        checkpointer.save_checkpoint(
-            fabric=fabric,
-            model=model,
-            optimizer=optimizer,
-            epoch=epoch,
-            global_step=global_step,
-            filepath=final_filepath,
-            scheduler=scheduler,
-            verbose=True,  # Always be verbose for final checkpoint
-        )
+        if fabric.is_global_zero:
+            final_filepath = os.path.join(self.dirpath, "last.ckpt")
+            checkpointer.save_checkpoint(
+                fabric=fabric,
+                model=model,
+                optimizer=optimizer,
+                epoch=epoch,
+                global_step=global_step,
+                filepath=final_filepath,
+                scheduler=scheduler,
+                verbose=True,  # Always be verbose for final checkpoint
+            )
 
-        log.info(f"Training completed. Final checkpoint saved to {final_filepath}")
+            log.info(f"Training completed. Final checkpoint saved to {final_filepath}")
+        fabric.barrier()
