@@ -9,7 +9,7 @@ from torchmetrics import Metric
 
 from src.utils import pylogger
 
-log = pylogger.RankedLogger(__name__, rank_zero_only=True)
+log = pylogger.RankedLogger(__name__)
 
 
 def train_one_epoch(
@@ -31,7 +31,8 @@ def train_one_epoch(
     optimizer.zero_grad()
 
     # Wrap data loader with progress bar
-
+    
+    log.info(f"on_train_epoch_start {epoch}")
     fabric.call(
         "on_train_epoch_start",
         fabric=fabric,
@@ -45,6 +46,7 @@ def train_one_epoch(
         "desc": f"Epoch {epoch}",
         "disable": not fabric.is_global_zero, # Only show progress bar on global zero
     }
+    log.info(f"tqdm {epoch}")
     with tqdm(data_loader, **tqdm_kwargs) as pbar:
         for batch_idx, batch in enumerate(pbar):
             # Forward pass

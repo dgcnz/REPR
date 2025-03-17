@@ -19,7 +19,7 @@ from src.utils import pylogger, extras, checkpointer
 from src.utils.instantiators import instantiate_callbacks, instantiate_loggers
 from src.engine_pretrain import train_one_epoch
 
-log = pylogger.RankedLogger(__name__, rank_zero_only=True)
+log = pylogger.RankedLogger(__name__)
 
 
 def ieval(expr):
