@@ -92,18 +92,16 @@ class ModelCheckpoint(object):
         **kwargs,
     ) -> None:
         """Save the final checkpoint at the end of training."""
-        if fabric.is_global_zero:
-            final_filepath = os.path.join(self.dirpath, "last.ckpt")
-            checkpointer.save_checkpoint(
-                fabric=fabric,
-                model=model,
-                optimizer=optimizer,
-                epoch=epoch,
-                global_step=global_step,
-                filepath=final_filepath,
-                scheduler=scheduler,
-                verbose=True,  # Always be verbose for final checkpoint
-            )
+        final_filepath = os.path.join(self.dirpath, "last.ckpt")
+        checkpointer.save_checkpoint(
+            fabric=fabric,
+            model=model,
+            optimizer=optimizer,
+            epoch=epoch,
+            global_step=global_step,
+            filepath=final_filepath,
+            scheduler=scheduler,
+            verbose=True,  # Always be verbose for final checkpoint
+        )
 
-            log.info(f"Training completed. Final checkpoint saved to {final_filepath}")
-        fabric.barrier(f"checkpoint:on_train_end")
+        log.info(f"Training completed. Final checkpoint saved to {final_filepath}")

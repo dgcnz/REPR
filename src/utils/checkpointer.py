@@ -11,7 +11,7 @@ from lightning.fabric.wrappers import _unwrap_objects
 
 from src.utils import pylogger
 
-log = pylogger.RankedLogger(__name__, rank_zero_only=True)
+log = pylogger.RankedLogger(__name__)
 
 
 def save_checkpoint(
@@ -20,8 +20,8 @@ def save_checkpoint(
     optimizer: Any,
     epoch: int,
     filepath: str,
+    global_step: int,
     verbose: bool = True,
-    global_step: int = None,
     scheduler=None,
     **kwargs
 ) -> None:
@@ -38,26 +38,16 @@ def save_checkpoint(
         scheduler: Optional learning rate scheduler to save
         **kwargs: Additional items to save in the checkpoint
     """
-    if not fabric.is_global_zero:
-        return
-        
-    model_unwrapped = _unwrap_objects(model)
-    optimizer_unwrapped = _unwrap_objects(optimizer)
-    
     checkpoint = {
-        "model": model_unwrapped.state_dict(),
-        "optimizer": optimizer_unwrapped.state_dict(),
+        "model": model,
+        "optimizer": optimizer,
         "epoch": epoch,
+        "global_step": global_step,
     }
-    
-    # Save global step if provided
-    if global_step is not None:
-        checkpoint["global_step"] = global_step
     
     # Save scheduler if provided
     if scheduler is not None:
-        scheduler_unwrapped = _unwrap_objects(scheduler)
-        checkpoint["scheduler"] = scheduler_unwrapped.state_dict()
+        checkpoint["scheduler"] = scheduler
     
     # Save wandb run ID in checkpoint if available
     if wandb.run is not None:
@@ -66,9 +56,6 @@ def save_checkpoint(
     # Save any additional items provided
     for key, value in kwargs.items():
         checkpoint[key] = value
-    
-    # Create directory if it doesn't exist
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
     
     # Save the checkpoint
     fabric.save(filepath, checkpoint)
