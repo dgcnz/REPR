@@ -11,15 +11,13 @@ class HFDataset(Dataset):
         split="train",
         img_key: str = "image",
         transform=None,
+        **kwargs,
     ):
         warnings.filterwarnings("ignore", "(Possibly )?corrupt EXIF data", UserWarning)
 
         if "HF_HOME" in os.environ:
-            cache_dir = os.environ["HF_HOME"]
-            print(f"Using cache dir: {cache_dir}")
-        else:
-            cache_dir = None
-        self.ds = load_dataset(dataset, name, split=split, cache_dir=cache_dir)
+            kwargs["cache_dir"] = os.environ["HF_HOME"]
+        self.ds = load_dataset(dataset, name, split=split, **kwargs)
         self.transform = transform
         self.img_key = img_key
 
