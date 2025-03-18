@@ -39,6 +39,9 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
     if cfg.get("float32_matmul_precision"):
         torch.set_float32_matmul_precision(cfg.float32_matmul_precision)
 
+    # TODO: add option to cfg
+    torch.backends.cuda.matmul.allow_tf32 = True
+
     # cuDNN optimization
     if cfg.get("cudnn_benchmark", False):
         cudnn.benchmark = True
