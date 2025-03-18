@@ -24,7 +24,7 @@ decoder_num_heads: 16
 sampler: stratified_jittered
 criterion: l1
 
-alpha_t: 0.6
-alpha_ts: 0.75
-alpha_s: 0.8
+alpha_t: 0.5
+alpha_ts: 0.8
+alpha_s: 0.95
 

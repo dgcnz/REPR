@@ -68,6 +68,8 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         alpha_t: float = 0.5,  # weight between inter/intra translation
         alpha_ts: float = 0.5,  # weight between translation and scale
         alpha_s: float = 0.75,  # weight between inter/intra scale
+        # Debugging parameters
+        verbose: bool = False,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -133,6 +135,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, self.num_targets, bias=False)
         self.tanh = nn.Tanh()
+        self.verbose = verbose
         self.initialize_weights()
 
     def update_conf(
@@ -281,6 +284,9 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         out["params"] = params.unsqueeze(2).expand(-1, -1, N_nopos, -1).flatten(1, 2)
         # Store branch-specific shape: (crop_size, tokens_per_crop, number_of_crops)
         out["shapes"] = (H, N_nopos, V)
+
+        if self.verbose:
+            out["patch_positions_vis"] = _out_enc["patch_positions_vis"].detach()
         return out
 
     def forward(
@@ -300,6 +306,9 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             g_shapes=g_out["shapes"],
             l_shapes=l_out["shapes"],
         )
+        if self.verbose:
+            out["g_patch_positions_vis"] = g_out["patch_positions_vis"]
+            out["l_patch_positions_vis"] = l_out["patch_positions_vis"] 
 
         # Concatenate global and local branches.
         pose_pred_nopos = torch.cat(
