@@ -1,6 +1,7 @@
 # @package _global_
 defaults:
   - pretrain/in1k/partmae_v4/vit_b_16/_base
+  - override /data: in1k_snellius
 
 compile: True
 
