@@ -1,5 +1,6 @@
 from typing import Any, Dict
 import torch
+from torch import nn
 from lightning import Fabric
 from src.utils import pylogger
 from torchmetrics import Metric
@@ -40,7 +41,7 @@ class MetricLogger(object):
         self._log_lr(fabric, global_step, optimizer)
 
     def on_train_batch_end(
-        self, outputs: Dict, metric_collection: Metric, **kwargs
+        self, model: nn.Module, outputs: Dict, metric_collection: Metric, **kwargs
     ) -> None:
         """Update metrics at the end of each training batch."""
         metric_collection.update(outputs)

@@ -24,6 +24,7 @@ def train_one_epoch(
     scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
     accum_iter: int = 1,
     clip_grad: float = 0.0,
+    track_grad_norm: bool = False,
 ):
     """Train model for one epoch. Logging and metrics are handled by callbacks."""
     model.train()
@@ -69,8 +70,12 @@ def train_one_epoch(
                 continue
 
             # Gradient clipping
+            if track_grad_norm:
+                outputs["grad_norm"] = _compute_grad_norm(model)
+
             if clip_grad is not None and clip_grad > 0:
                 fabric.clip_gradients(model, optimizer, max_norm=clip_grad)
+
 
             # Optimizer step
             optimizer.step()
@@ -109,3 +114,13 @@ def train_one_epoch(
 
     log.debug(f"Finished train_one_epoch {epoch}.")
     return global_step
+
+
+@torch.no_grad()
+def _compute_grad_norm(model: nn.Module, norm_type: int = 2):
+    """Compute the gradient norm of the model parameters."""
+    parameters = [p for p in model.parameters() if p.grad is not None]
+    grad_norm = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), norm_type) for p in parameters]), norm_type
+    )
+    return grad_norm

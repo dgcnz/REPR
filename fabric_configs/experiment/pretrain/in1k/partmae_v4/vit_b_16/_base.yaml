@@ -23,7 +23,7 @@ trainer:
   accumulate_grad_batches: ???
   num_nodes: 1
   devices: 1
-
+  gradient_clip_val: 0.5
 
 # mae/droppose blr
 # blr: 1.5e-4

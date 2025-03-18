@@ -81,13 +81,41 @@ class ParametrizedMultiCropV2(object):
         global_params = torch.cat([canon_params.expand(Ng, -1), global_params], 1)
         return global_crops, global_params, local_crops, local_params
 
+    def recreate_local(
+        self, canonical_img: Float[Tensor, "C H W"], local_params: Float[Tensor, "N 4"]
+    ) -> Float[Tensor, "C H W"]:
+        """
+        Recreate the local image from the image and local parameters.
+        """
+        return [
+            self.local_ttx.transform.transforms[0].consume_transform(
+                canonical_img, local_params[i].tolist()
+            )[0]
+            for i in range(local_params.shape[0])
+        ]
+
+    def recreate_global(
+        self, canonical_img: Float[Tensor, "C H W"], global_params: Float[Tensor, "N 4"]
+    ) -> Float[Tensor, "C H W"]:
+        """
+        Recreate the global image from the image and global parameters.
+        """
+        return [
+            self.global_ttx.transform.transforms[0].consume_transform(
+                canonical_img, global_params[i].tolist()
+            )[0]
+            for i in range(global_params.shape[0])
+        ]
+
     def recreate_canonical(
         self, image: Float[Tensor, "C H W"], canonical_params: Float[Tensor, "4"]
     ) -> Float[Tensor, "C H W"]:
         """
         Recreate the canonical image from the image and canonical parameters.
         """
-        return self.canonicalize.transform.consume_transform(image, canonical_params)[0]
+        return self.canonicalize.transform.consume_transform(
+            image, canonical_params.tolist()
+        )[0]
 
     def compute_max_scale_ratio_aug(self) -> float:
         grrc = self.global_ttx.transform.transforms[0]

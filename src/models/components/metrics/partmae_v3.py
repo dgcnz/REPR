@@ -1,8 +1,11 @@
 # from torchmetrics.wrappers import ClasswiseWrapper # inspired by ClasswiseWrapper
-from torchmetrics import MeanMetric, Metric
+from torchmetrics import MeanMetric, Metric, MaxMetric
 from torchmetrics.wrappers.abstract import WrapperMetric
 from torch import nn, Tensor
 import torch
+from src.utils.pylogger import RankedLogger
+
+log = RankedLogger(__name__)
 
 class V3Metrics(WrapperMetric):
     metrics: dict[str, Metric]
@@ -23,12 +26,21 @@ class V3Metrics(WrapperMetric):
                 "pred_ds_std": MeanMetric(**metric_kwargs),
                 "gt_dt_std": MeanMetric(**metric_kwargs),
                 "gt_ds_std": MeanMetric(**metric_kwargs),
+                ### gradient norms
+                "grad_mean_norm": MeanMetric(**metric_kwargs),
+                "grad_max_norm": MaxMetric(**metric_kwargs),
             }
         )
 
     @torch.no_grad()
     def update(self, outputs: dict[str, Tensor]):
-        """Update metrics from model outputs."""
+        """Update metrics from model outputs.
+        
+        Args:
+            outputs: Dictionary of model outputs
+            model: Optional model to compute gradient norms from. If provided, 
+                   it overrides the model set during initialization.
+        """
         for k in self.metrics:
             if k.startswith("loss"):
                 self.metrics[k].update(outputs[k])
@@ -37,6 +49,10 @@ class V3Metrics(WrapperMetric):
         self.metrics["pred_ds_std"].update(outputs["pred_dT"][..., 2:].std())
         self.metrics["gt_dt_std"].update(outputs["gt_dT"][..., :2].std())
         self.metrics["gt_ds_std"].update(outputs["gt_dT"][..., 2:].std())
+        
+        if "grad_norm" in outputs:
+            self.metrics["grad_mean_norm"].update(outputs["grad_norm"].mean())
+            self.metrics["grad_max_norm"].update(outputs["grad_norm"].max())
 
     def compute(self):
         return {k: v.compute() for k, v in self.metrics.items()}

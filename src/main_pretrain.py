@@ -114,6 +114,7 @@ def train(
     max_epochs: int = 1000,
     accumulate_grad_batches: int = 1,
     gradient_clip_val: float = 0,
+    track_grad_norm: bool = False,
 ):
     start_epoch, global_step = 0, 0
 
@@ -161,6 +162,7 @@ def train(
             scheduler=scheduler,
             accum_iter=accumulate_grad_batches,
             clip_grad=gradient_clip_val,
+            track_grad_norm=track_grad_norm,
         )
         log.debug(f"train_one_epoch {epoch} done")
 
@@ -211,9 +213,10 @@ def main(cfg: DictConfig) -> None:
             metric_collection=metric_collection,
             max_epochs=cfg.trainer.get("max_epochs", 1000),
             accumulate_grad_batches=cfg.trainer.get("accumulate_grad_batches", 1),
-            gradient_clip_val=cfg.trainer.get("gradient_clip_val", 0),
             scheduler=scheduler,
             ckpt_path=ckpt_path,
+            gradient_clip_val=cfg.trainer.get("gradient_clip_val", 0),
+            track_grad_norm=cfg.trainer.get("track_grad_norm", False),
         )
     except Exception as e:
         log.error(f"Training failed with error: {e}")
