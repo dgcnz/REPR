@@ -40,6 +40,7 @@ model:
   sampler: stratified_jittered
   criterion: l1
   alpha_s: 1.0
+  num_views: 6
 
 scheduler:
   warmup_t: 10 
