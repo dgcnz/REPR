@@ -287,6 +287,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
 
         if self.verbose:
             out["patch_positions_vis"] = _out_enc["patch_positions_vis"].detach()
+            out["ids_remove_pos"] = _out_enc["ids_remove_pos"].detach()
         return out
 
     def forward(
@@ -309,6 +310,8 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         if self.verbose:
             out["g_patch_positions_vis"] = g_out["patch_positions_vis"]
             out["l_patch_positions_vis"] = l_out["patch_positions_vis"] 
+            out["g_ids_remove_pos"] = g_out["ids_remove_pos"]
+            out["l_ids_remove_pos"] = l_out["ids_remove_pos"]
 
         # Concatenate global and local branches.
         pose_pred_nopos = torch.cat(

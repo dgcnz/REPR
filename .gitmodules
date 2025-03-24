@@ -1,3 +1,6 @@
 [submodule "third-party/detectron2"]
 	path = third-party/detectron2
 	url = https://github.com/facebookresearch/detectron2.git
+[submodule "third-party/detrex"]
+	path = third-party/detrex
+	url = https://github.com/dgcnz/detrex.git
