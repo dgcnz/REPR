@@ -1,4 +1,4 @@
-_target_: timm.scheduler.CosineLRScheduler
+_target_: timm.scheduler.cosine_lr.CosineLRScheduler
 _partial_: true
 # t_initial=num_epochs,
 t_initial: ???
