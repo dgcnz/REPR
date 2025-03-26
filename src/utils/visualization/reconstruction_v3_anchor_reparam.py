@@ -110,7 +110,7 @@ def ls_solver_fixed_anchor_reparam_vectorized(
     x[anchor_index] = anchor_value
     return x
 
-def reconstruction_from_gt_dT_with_anchor(
+def reconstruction_lstsq_with_anchor_reparam(
     image_crops: torch.Tensor,      # [V, C, H, W] augmented crop images.
     patch_positions: torch.Tensor,  # [V, N, 2] patch positions in crop coordinates.
     patch_size: int,                # e.g., 16.

@@ -78,7 +78,7 @@ def reconstruct_4d_poses_centered_torch_vectorized(
 
 
 
-def reconstruction_lstq(
+def reconstruction_lstsq(
     patch_positions_nopos: torch.Tensor,  # [V, N_vis, 2] in crop coordinates
     pred_dT: torch.Tensor,  # [V, V, N_mask, N_mask, 4]
     original_images: torch.Tensor,  # [V, C, H, W] augmented crop images
