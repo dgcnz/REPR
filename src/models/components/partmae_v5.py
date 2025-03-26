@@ -29,37 +29,6 @@ SAMPLERS = {
 class PARTMaskedAutoEncoderViT(nn.Module):
     r"""
     Self-supervised training by generalized patch-level transforms between augmented views of an image.
-
-    The model accepts global and local views as 5D tensors [B, V, C, H, W]. Each view is encoded independently
-    and augmented with a learnable segment embedding (indicating view identity). For each view the class token (first token)
-    is separated from patch tokens. A joint latent sequence is built by concatenating all class tokens (one per view) first,
-    followed by all patch tokens (flattened across views). The decoder is applied to this joint sequence; its first V tokens
-    (the class tokens) are discarded and the remaining patch tokens are used for downstream loss computation.
-    Joint drop indices (computed from per-view ids_remove) and joint patch positions are also built.
-    All this reordering logic is encapsulated in the helper method `prepare_joint_inputs`.
-
-    :param img_size: Global crop size (e.g., 224)
-    :param canonical_img_size: Canonical image size (e.g., 512)
-    :param max_scale_ratio: Maximum scale ratio for normalization
-    :param patch_size: Patch size for ViT
-    :param in_chans: Number of input channels
-    :param embed_dim: Embedding dimension for encoder
-    :param depth: Number of transformer blocks in encoder
-    :param num_heads: Number of attention heads in encoder
-    :param mlp_ratio: MLP ratio in transformer blocks
-    :param norm_layer: Normalization layer class
-    :param mask_ratio: Mask ratio for patch embedding
-    :param pos_mask_ratio: Ratio for positional masking
-    :param decoder_embed_dim: Embedding dimension for decoder
-    :param decoder_depth: Number of transformer blocks in decoder
-    :param decoder_num_heads: Number of attention heads in decoder
-    :param sampler: Sampler type for patch embedding
-    :param criterion: Loss criterion ('l1' or 'mse')
-    :param alpha_t: Weight between inter/intra translation loss
-    :param alpha_ts: Weight between translation and scale loss
-    :param alpha_s: Weight between inter/intra scale loss
-    :param verbose: If True, enable extra logging
-    :param num_views: Total number of views per image (e.g., for 2 global + 6 local, num_views=8)
     """
 
     def __init__(

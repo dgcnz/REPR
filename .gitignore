@@ -171,3 +171,10 @@ third-party/DropPos/output_dir
 wandb/
 **.pth
 outputs
+**/*.ckpt
+**/*.pt
+**/*.onnx
+**/*.pth
+**/*.png
+**/*.jpeg
+**/*.jpg
