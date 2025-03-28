@@ -17,6 +17,7 @@ from src.models.components.utils.offgrid_pos_embed import (
 )
 from torch.nn.modules.utils import _pair
 from jaxtyping import Int, Float
+import warnings
 
 SAMPLERS = {
     "random": random_sampling,
@@ -54,7 +55,10 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         alpha_ts: float = 0.5,
         alpha_s: float = 0.75,
         verbose: bool = False,
-        num_views: int = 6, # default is 1 global 5 local
+        num_views: int = 6,  # default is 1 global 5 local
+        # TODO: remove after 200ep training of old model
+        permute_segment_embed: bool = False,
+        freeze_encoder: bool = False,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -99,7 +103,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
                 for _ in range(depth)
             ]
         )
-        self.norm = norm_layer(embed_dim)
+        self.norm: nn.Module = norm_layer(embed_dim)
         self.decoder_embed_dim = decoder_embed_dim
         self.decoder_embed = nn.Linear(embed_dim, decoder_embed_dim, bias=True)
         self.decoder_blocks = nn.ModuleList(
@@ -123,8 +127,32 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # Instead of using nn.Embedding, use a raw parameter for view-specific segment embeddings.
         self.num_views = num_views
         self.segment_embed = nn.Parameter(torch.randn(num_views, embed_dim))
+        self.permute_segment_embed = permute_segment_embed
+        if not permute_segment_embed:
+            warnings.warn(
+                "permute_segment_embed is set to False. "
+                "This should be set to True to avoid overfitting to order in views."
+            )
 
         self.initialize_weights()
+        if freeze_encoder:
+            self.freeze_encoder()
+
+    def freeze_encoder(self):
+        r"""
+        Freeze the encoder blocks.
+        """
+        for param in self.patch_embed.parameters():
+            param.requires_grad = False
+
+        for block in self.blocks:
+            for param in block.parameters():
+                param.requires_grad = False
+
+        for param in self.norm.parameters():
+            param.requires_grad = False
+
+        self.cls_token.requires_grad = False
 
     def update_conf(
         self,
@@ -232,22 +260,27 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         )
         # For global views.
         B, gV, M_g = g_enc["ids_remove_pos"].shape
-        N_g = g_enc["patch_positions_vis"].shape[2]  # number of patch tokens per global view
-        global_offsets = (torch.arange(gV, device=g_enc["ids_remove_pos"].device) * N_g).view(1, gV, 1)
+        N_g = g_enc["patch_positions_vis"].shape[2]
+        # number of patch tokens per global view
+        global_offsets = (
+            torch.arange(gV, device=g_enc["ids_remove_pos"].device) * N_g
+        ).view(1, gV, 1)
         adjusted_global_ids = g_enc["ids_remove_pos"] + global_offsets  # [B, gV, M_g]
 
         # For local views.
         B, lV, M_l = l_enc["ids_remove_pos"].shape
-        N_l = l_enc["patch_positions_vis"].shape[2]  # number of patch tokens per local view
+        N_l = l_enc["patch_positions_vis"].shape[2]
+        # number of patch tokens per local view
         # All global patch tokens come first, so offset local ids by (gV * N_g)
-        local_offsets = gV * N_g + (torch.arange(lV, device=l_enc["ids_remove_pos"].device) * N_l).view(1, lV, 1)
+        local_offsets = gV * N_g + (
+            torch.arange(lV, device=l_enc["ids_remove_pos"].device) * N_l
+        ).view(1, lV, 1)
         adjusted_local_ids = l_enc["ids_remove_pos"] + local_offsets  # [B, lV, M_l]
 
         # Concatenate the adjusted indices.
-        joint_ids_remove = torch.cat([
-            adjusted_global_ids.view(B, -1),
-            adjusted_local_ids.view(B, -1)
-        ], dim=1)
+        joint_ids_remove = torch.cat(
+            [adjusted_global_ids.view(B, -1), adjusted_local_ids.view(B, -1)], dim=1
+        )
         return joint_latents, joint_patch_pos, joint_ids_remove
 
     def forward_encoder(self, x: Tensor) -> dict:
@@ -506,13 +539,23 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         g_enc = self.encode_views(g_x)
         l_enc = self.encode_views(l_x)
 
+        if self.permute_segment_embed:
+            # Total number of segment embeddings is self.num_views
+            perm = torch.randperm(self.num_views)
+
+            # Randomly assign embeddings to global and local views based on their counts.
+            g_perm = perm[:gV]
+            l_perm = perm[gV : gV + lV]
+
+            g_segment = self.segment_embed[g_perm]
+            l_segment = self.segment_embed[l_perm]
+        else:
+            g_segment = self.segment_embed[:gV]
+            l_segment = self.segment_embed[gV : gV + lV]
+
         # Add view-specific segment embeddings.
-        g_enc["z_enc"] = g_enc["z_enc"] + self.segment_embed[:gV].unsqueeze(
-            0
-        ).unsqueeze(2)
-        l_enc["z_enc"] = l_enc["z_enc"] + self.segment_embed[gV : gV + lV].unsqueeze(
-            0
-        ).unsqueeze(2)
+        g_enc["z_enc"] = g_enc["z_enc"] + g_segment.unsqueeze(0).unsqueeze(2)
+        l_enc["z_enc"] = l_enc["z_enc"] + l_segment.unsqueeze(0).unsqueeze(2)
 
         # Prepare joint inputs.
         joint_latents, joint_patch_pos, joint_ids_remove = self.prepare_joint_inputs(
