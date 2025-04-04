@@ -34,7 +34,6 @@ import warnings
 warnings.simplefilter(action="ignore", category=FutureWarning)
 import wandb
 
-wandb.init(sync_tensorboard=True)
 
 logger = logging.getLogger("detectron2")
 
@@ -123,6 +122,8 @@ def main(args):
     cfg = LazyConfig.load(args.config_file)
     cfg = LazyConfig.apply_overrides(cfg, args.opts)
     default_setup(cfg, args)
+    if comm.is_main_process():
+        wandb.init(project="PART-detection", sync_tensorboard=True)
 
     if args.eval_only:
         model = instantiate(cfg.model)
@@ -147,4 +148,10 @@ def invoke_main() -> None:
 
 
 if __name__ == "__main__":
-    invoke_main()  # pragma: no cover
+    try:
+        invoke_main()  # pragma: no cover
+    except Exception as e:
+        raise e
+    finally:
+        if comm.is_main_process():
+            wandb.finish()
