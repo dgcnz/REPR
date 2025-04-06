@@ -80,6 +80,9 @@ def build_dataset(is_train, args):
             path, name=name, split="train" if is_train else "validation", cache_dir=cache_dir
         )
         dataset = HFWrapper(dataset, transform)
+    if args.data_path.startswith("snellius+"):
+        root = os.path.join(args.data_path, 'train' if is_train else 'val')
+        dataset = datasets.ImageFolder(root, transform=transform)
     else:
         # TODO modify your own dataset here
         folder = os.path.join(args.data_path, "train" if is_train else "val")
