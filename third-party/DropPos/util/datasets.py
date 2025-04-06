@@ -81,6 +81,8 @@ def build_dataset(is_train, args):
         )
         dataset = HFWrapper(dataset, transform)
     if args.data_path.startswith("snellius+"):
+        # remove snellius+ prefix
+        path = args.data_path[len("snellius+") :]
         root = os.path.join(args.data_path, 'train' if is_train else 'val')
         dataset = datasets.ImageFolder(root, transform=transform)
     else:
