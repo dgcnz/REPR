@@ -57,26 +57,31 @@ class FabricDetectionTrainer(SimpleTrainer):
             "[FabricDetectionTrainer] Model is not in training mode!"
         )
 
-        start_time = time.perf_counter()
-        total_loss = 0.0
+        total_data_time = 0.0
         loss_dict_agg = defaultdict(float)
+        
+        self.optimizer.zero_grad()
 
         # Accumulate gradients over `accum_iter` mini–batches.
         for i in range(self.accum_iter):
+            start = time.perf_counter()
             data = next(self._data_loader_iter)
+            data_time = time.perf_counter() - start
+            total_data_time += data_time
             # Forward pass: model returns either a tensor or a dict of losses.
             loss_dict = self.model(data)
             if isinstance(loss_dict, torch.Tensor):
-                loss = loss_dict
+                losses = loss_dict
                 loss_dict = {"total_loss": loss_dict}
             else:
-                loss = sum(loss_dict.values())
+                losses = sum(loss_dict.values())
 
-            loss = loss / self.accum_iter  # scale loss for accumulation
+            losses = losses / self.accum_iter  # scale loss for accumulation
             is_last_accum = i == self.accum_iter - 1
             with self.fabric.no_backward_sync(self.model, enabled=not is_last_accum):
-                self.fabric.backward(loss)
-            total_loss += loss.item()
+                self.fabric.backward(losses)
+            
+            self.after_backward()
 
             # Aggregate loss components using dict.get() to simplify accumulation.
             for k, v in loss_dict.items():
@@ -92,5 +97,4 @@ class FabricDetectionTrainer(SimpleTrainer):
         self.optimizer.step()
         self.optimizer.zero_grad()
 
-        data_time = time.perf_counter() - start_time
-        self._write_metrics(loss_dict_agg, data_time)
+        self._write_metrics(loss_dict_agg, total_data_time)
