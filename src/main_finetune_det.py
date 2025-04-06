@@ -47,8 +47,8 @@ def setup_fabric_ddp(cfg, args):
     logger.info("Using precision: {}".format(precision))
     fabric = Fabric(
         accelerator=cfg.train.get("accelerator", "auto"),
-        devices=args.num_gpus,         # use command–line number of GPUs per machine
-        num_nodes=args.num_machines,     # use command–line total number of machines
+        devices=args.num_gpus,  # use command–line number of GPUs per machine
+        num_nodes=args.num_machines,  # use command–line total number of machines
         precision=precision,
         strategy=cfg.train.get("strategy", "auto"),
     )
@@ -89,9 +89,11 @@ def do_train(args, cfg):
     if args.num_gpus > 1 and cfg.train.ddp.fp16_compression:
         # register comm hooks for DDP
         from torch.distributed.algorithms.ddp_comm_hooks import default as comm_hooks
-        logger.info("Registering DDP comm hooks for fp16 compression")
-        model._forward_module.register_comm_hook(state=None, hook=comm_hooks.fp16_compress_hook)
 
+        logger.info("Registering DDP comm hooks for fp16 compression")
+        model._forward_module.register_comm_hook(
+            state=None, hook=comm_hooks.fp16_compress_hook
+        )
 
     # Create the detection trainer using our FabricDetectionTrainer.
     accum_iter = cfg.train.get("accumulate_grad_batches", 1)
@@ -102,23 +104,29 @@ def do_train(args, cfg):
     )
 
     # Register detectron2 hooks.
-    trainer.register_hooks([
-        hooks.IterationTimer(),
-        hooks.LRScheduler(scheduler=instantiate(cfg.lr_multiplier)),
-        (
-            hooks.PeriodicCheckpointer(
-                DetectionCheckpointer(model, cfg.train.output_dir, trainer=trainer),
-                **cfg.train.checkpointer
-            ) if fabric.is_global_zero else None
-        ),
-        hooks.EvalHook(cfg.train.eval_period, lambda: do_test(cfg, model)),
-        (
-            hooks.PeriodicWriter(
-                default_writers(cfg.train.output_dir, cfg.train.max_iter),
-                period=cfg.train.log_period,
-            ) if fabric.is_global_zero else None
-        ),
-    ])
+    trainer.register_hooks(
+        [
+            hooks.IterationTimer(),
+            hooks.LRScheduler(scheduler=instantiate(cfg.lr_multiplier)),
+            (
+                hooks.PeriodicCheckpointer(
+                    DetectionCheckpointer(model, cfg.train.output_dir, trainer=trainer),
+                    **cfg.train.checkpointer,
+                )
+                if fabric.is_global_zero
+                else None
+            ),
+            hooks.EvalHook(cfg.train.eval_period, lambda: do_test(cfg, model)),
+            (
+                hooks.PeriodicWriter(
+                    default_writers(cfg.train.output_dir, cfg.train.max_iter),
+                    period=cfg.train.log_period,
+                )
+                if fabric.is_global_zero
+                else None
+            ),
+        ]
+    )
 
     # Load from checkpoint if available.
     checkpointer = DetectionCheckpointer(model, cfg.train.output_dir, trainer=trainer)
@@ -156,21 +164,10 @@ def main(args):
         do_train(args, cfg)
 
 
-def invoke_main():
-    args = default_argument_parser().parse_args()
-    launch(
-        main,
-        args.num_gpus,
-        num_machines=args.num_machines,
-        machine_rank=args.machine_rank,
-        dist_url=args.dist_url,
-        args=(args,),
-    )
-
-
 if __name__ == "__main__":
     try:
-        invoke_main()
+        args = default_argument_parser().parse_args()
+        main(args)
     except Exception as e:
         raise e
     finally:
