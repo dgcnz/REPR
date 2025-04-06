@@ -21,7 +21,6 @@ from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.engine import (
     default_argument_parser,
     default_setup,
-    launch,
     default_writers,
     hooks,
 )
@@ -29,6 +28,7 @@ from detectron2.evaluation import inference_on_dataset, print_csv_format
 import wandb
 from lightning import Fabric
 from src.engine_finetune_det import FabricDetectionTrainer
+from detectron2.engine.defaults import _set_float32_precision
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 logger = logging.getLogger("detectron2")
@@ -43,6 +43,8 @@ def setup_fabric_ddp(cfg, args):
     precision = None
     if cfg.train.amp.enabled:
         precision = cfg.train.amp.get("precision", "bf16-mixed")
+
+    _set_float32_precision(cfg.train.get("float32_precision", "highest"))
 
     logger.info("Using precision: {}".format(precision))
     fabric = Fabric(
