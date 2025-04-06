@@ -28,13 +28,12 @@ from detectron2.evaluation import inference_on_dataset, print_csv_format
 import wandb
 from lightning import Fabric
 from src.engine_finetune_det import FabricDetectionTrainer
-from detectron2.engine.defaults import _set_float32_precision
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 logger = logging.getLogger("detectron2")
 
 
-def setup_fabric_ddp(cfg, args):
+def setup_fabric(cfg, args):
     """
     Common function to initialize Fabric (handling accelerator, devices, etc.) and DDP.
     Uses command–line args for distributed settings.
@@ -43,8 +42,6 @@ def setup_fabric_ddp(cfg, args):
     precision = None
     if cfg.train.amp.enabled:
         precision = cfg.train.amp.get("precision", "bf16-mixed")
-
-    _set_float32_precision(cfg.train.get("float32_precision", "highest"))
 
     logger.info("Using precision: {}".format(precision))
     fabric = Fabric(
@@ -67,7 +64,7 @@ def do_test(cfg, model):
         return ret
 
 
-def do_train(args, cfg):
+def do_train(fabric, args, cfg):
     # Instantiate model and move it to the proper device.
     model = instantiate(cfg.model)
     logger.info("Model:\n{}".format(model))
@@ -79,9 +76,6 @@ def do_train(args, cfg):
 
     # Instantiate the training dataloader.
     train_loader = instantiate(cfg.dataloader.train)
-
-    # Set up Fabric/DDP using the common helper (using args for distributed settings).
-    fabric = setup_fabric_ddp(cfg, args)
 
     if fabric.is_global_zero:
         wandb.init(project="PART-detection", sync_tensorboard=True)
@@ -142,28 +136,15 @@ def do_train(args, cfg):
     trainer.train(start_iter, cfg.train.max_iter)
 
 
-def do_eval(cfg, args):
-    # Set up Fabric/DDP using the common helper.
-    fabric = setup_fabric_ddp(cfg, args)
-    if fabric.is_global_zero:
-        wandb.init(project="PART-detection", sync_tensorboard=True)
-    model = instantiate(cfg.model)
-    model.to(cfg.train.device)
-    # Wrap model with Fabric/DDP.
-    model = fabric.setup(model)
-    DetectionCheckpointer(model).load(cfg.train.init_checkpoint)
-    print(do_test(cfg, model))
-
-
 def main(args):
     cfg = LazyConfig.load(args.config_file)
     cfg = LazyConfig.apply_overrides(cfg, args.opts)
+
+    fabric = setup_fabric(cfg, args)
     default_setup(cfg, args)
 
-    if args.eval_only:
-        do_eval(cfg, args)
-    else:
-        do_train(args, cfg)
+    assert not args.eval_only, "eval_only is not supported in this script."
+    do_train(fabric, args, cfg)
 
 
 if __name__ == "__main__":
