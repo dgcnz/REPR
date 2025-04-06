@@ -18,7 +18,6 @@ import logging
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import LazyConfig, instantiate
 from detectron2.engine import (
-    AMPTrainer,
     default_argument_parser,
     default_setup,
     default_writers,
@@ -33,7 +32,6 @@ from src.engine_finetune_det2 import (
     AMPTrainerWithAccumulation,
 )
 import wandb
-import lightning as L
 
 import warnings
 
@@ -150,7 +148,6 @@ def main(args):
 
 def invoke_main() -> None:
     args = default_argument_parser().parse_args()
-    L.seed_everything(42)
     launch(
         main,
         args.num_gpus,
