@@ -83,7 +83,7 @@ def build_dataset(is_train, args):
     if args.data_path.startswith("snellius+"):
         # remove snellius+ prefix
         path = args.data_path[len("snellius+") :]
-        root = os.path.join(args.data_path, 'train' if is_train else 'val')
+        root = os.path.join(path, 'train' if is_train else 'val')
         dataset = datasets.ImageFolder(root, transform=transform)
     else:
         # TODO modify your own dataset here
