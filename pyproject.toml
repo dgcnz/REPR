@@ -68,6 +68,7 @@ onnxscript = "^0.2.0"
 opencv-python = "^4.11.0.86"
 typeguard = "^4.4.2"
 marimo = "^0.11.29"
+ruff = "^0.11.4"
 
 [build-system]
 requires = ["poetry-core"]
