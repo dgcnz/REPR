@@ -62,7 +62,7 @@ def main():
         description="Export PartMAE model to backbone checkpoint"
     )
     parser.add_argument("ckpt_path", type=str, help="Path to the checkpoint file")
-    args = parser.parse_args(["artifacts/model-th0jy6wx:v0/epoch_0124.ckpt"])
+    args = parser.parse_args()
 
     # Load, process, and validate the state dict
     ckpt = torch.load(args.ckpt_path, map_location='cpu')
