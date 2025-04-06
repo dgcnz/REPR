@@ -88,7 +88,12 @@ def do_train(args, cfg):
         AMPTrainerWithAccumulation
         if cfg.train.amp.enabled
         else SimpleTrainerWithAccumulation
-    )(model, train_loader, optim)
+    )(
+        model,
+        train_loader,
+        optim,
+        accumulation_steps=cfg.train.get("accumulate_grad_batches", 1),
+    )
     checkpointer = DetectionCheckpointer(
         model,
         cfg.train.output_dir,

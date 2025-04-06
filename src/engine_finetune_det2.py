@@ -4,11 +4,13 @@ from detectron2.engine.train_loop import SimpleTrainer, AMPTrainer
 from detectron2.utils.events import get_event_storage
 from collections import defaultdict
 
+
 class SimpleTrainerWithAccumulation(SimpleTrainer):
     """
     A SimpleTrainer variant that supports gradient accumulation using a for-loop.
     This approach aggregates multiple mini-batches into a single optimizer update.
     """
+
     def __init__(
         self,
         model,
@@ -19,14 +21,23 @@ class SimpleTrainerWithAccumulation(SimpleTrainer):
         zero_grad_before_forward=False,
         async_write_metrics=False,
     ):
-        super().__init__(model, data_loader, optimizer, gather_metric_period, zero_grad_before_forward, async_write_metrics)
+        super().__init__(
+            model,
+            data_loader,
+            optimizer,
+            gather_metric_period,
+            zero_grad_before_forward,
+            async_write_metrics,
+        )
         self.accumulation_steps = accumulation_steps
 
     def run_step(self):
         """
         Run a training step that aggregates multiple mini-batches using a for-loop.
         """
-        assert self.model.training, "[SimpleTrainerWithAccumulation] model was changed to eval mode!"
+        assert self.model.training, (
+            "[SimpleTrainerWithAccumulation] model was changed to eval mode!"
+        )
 
         total_loss_dict = defaultdict(float)
         total_data_time = 0.0
@@ -72,6 +83,7 @@ class AMPTrainerWithAccumulation(AMPTrainer):
     An AMPTrainer variant that supports gradient accumulation using a for-loop.
     This approach aggregates multiple mini-batches into a single optimizer update with AMP scaling.
     """
+
     def __init__(
         self,
         model,
@@ -102,8 +114,12 @@ class AMPTrainerWithAccumulation(AMPTrainer):
         """
         Run a training step that aggregates multiple mini-batches using a for-loop, with AMP support.
         """
-        assert self.model.training, "[AMPTrainerWithAccumulation] model was changed to eval mode!"
-        assert torch.cuda.is_available(), "[AMPTrainerWithAccumulation] CUDA is required for AMP training!"
+        assert self.model.training, (
+            "[AMPTrainerWithAccumulation] model was changed to eval mode!"
+        )
+        assert torch.cuda.is_available(), (
+            "[AMPTrainerWithAccumulation] CUDA is required for AMP training!"
+        )
 
         total_loss_dict = defaultdict(float)
         total_data_time = 0.0
