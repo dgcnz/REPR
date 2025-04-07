@@ -1,6 +1,6 @@
 # Source:
 # https://github.com/IDEA-Research/detrex/blob/main/detrex/modeling/backbone/timm_backbone.py
-# 
+#
 # coding=utf-8
 # Copyright 2022 The IDEA Authors. All rights reserved.
 #
@@ -34,6 +34,8 @@ from detectron2.utils import comm
 from detectron2.utils.logger import setup_logger
 
 import timm
+import torch
+from timm.models.vision_transformer import VisionTransformer
 
 
 def log_timm_feature_info(feature_info):
@@ -42,7 +44,7 @@ def log_timm_feature_info(feature_info):
         feature_info (list[dict] | timm.models.features.FeatureInfo | None):
             feature_info of timm backbone.
     """
-    logger = setup_logger(name="timm backbone")
+    logger = setup_logger(name="timm_backbone")
     if feature_info is None:
         logger.warning("This backbone does not have feature_info")
     elif isinstance(feature_info, list):
@@ -55,6 +57,37 @@ def log_timm_feature_info(feature_info):
             logger.info(f"backbone out_strides: {feature_info.reduction()}")
         except AttributeError:
             logger.warning("Unexpected format of backbone feature_info")
+
+
+def _load_state_dict_to_features_only(model: VisionTransformer, state_dict: dict, strict: bool = False):
+    """Load state dict for features_only model.
+
+    Note:
+        - features_only expects keys to start with "model."
+        - https://github.com/huggingface/pytorch-image-models/blob/e44f14d7d2f557b9f3add82ee4f1ed2beefbb30d/timm/models/_features.py#L461-L466
+        - We may expect the following keys in the state dict to be "unexpected":
+            - the `norm` layer (sometimes) is removed from the state dict
+            - the `head` layer is removed from the state dict
+            - src: https://github.com/huggingface/pytorch-image-models/blob/e44f14d7d2f557b9f3add82ee4f1ed2beefbb30d/timm/models/vision_transformer.py#L790-L805
+    """
+    logger = setup_logger(name="timm_backbone")
+    state_dict = state_dict.copy()
+    # add "model." prefix to the keys in state_dict
+    state_dict = {f"model.{k}": v for k, v in state_dict.items()}
+
+    miss, unex = model.load_state_dict(state_dict, strict=strict)
+    logger.info(f"Missing keys: {miss}")
+    logger.info(f"Unexpected keys: {unex}")
+    # check missing keys is empty
+    assert not miss, f"Missing keys: {miss}"
+    # check unexpected keys is only at most "head" and "norm"
+    possibly_unexpected_keys = {
+        "model.head.weight",
+        "model.head.bias",
+        "model.norm.weight",
+        "model.norm.bias",
+    }
+    assert set(unex).issubset(possibly_unexpected_keys), f"Unexpected keys: {unex}"
 
 
 class TimmBackbone(Backbone):
@@ -84,36 +117,47 @@ class TimmBackbone(Backbone):
         model_name: str,
         features_only: bool = True,
         pretrained: bool = False,
-        checkpoint_path: str = "",
+        ckpt_path: str = "",
+        pretrained_strict: bool = False,
         in_channels: int = 3,
         out_indices: Tuple[int] = (0, 1, 2, 3),
         norm_layer: nn.Module = None,
         **kwargs,
     ):
         super().__init__()
-        logger = setup_logger(name="timm backbone")
-        if timm is None:
-            raise RuntimeError('Failed to import timm. Please run "pip install timm". ')
+        logger = setup_logger(name="timm_backbone")
         if not isinstance(pretrained, bool):
             raise TypeError("pretrained must be bool, not str for model path")
-        if features_only and checkpoint_path:
-            warnings.warn(
-                "Using both features_only and checkpoint_path may cause error"
-                " in timm. See "
-                "https://github.com/rwightman/pytorch-image-models/issues/488"
-            )
 
         try:
-            self.timm_model = timm.create_model(
+            self.timm_model: nn.Module = timm.create_model(
                 model_name=model_name,
                 features_only=features_only,
                 pretrained=pretrained,
                 in_chans=in_channels,
                 out_indices=out_indices,
-                checkpoint_path=checkpoint_path,
                 norm_layer=norm_layer,
                 **kwargs,
             )
+            if ckpt_path:
+                logger.info(f"Loading checkpoint from {ckpt_path}")
+                state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+
+                if features_only:
+                    _load_state_dict_to_features_only(
+                        self.timm_model, state_dict
+                    )
+                else:
+                    miss, unex = self.timm_model.load_state_dict(
+                        state_dict, strict=pretrained_strict
+                    )
+                    logger.info(f"Loaded checkpoint from {ckpt_path}")
+                    logger.info(f"Missing keys: {miss}")
+                    logger.info(f"Unexpected keys: {unex}")
+                    assert not miss, f"Missing keys: {miss}"
+                    assert len(unex) < 4, f"Unexpected keys: {unex}"
+                
+                logger.info(f"Loaded checkpoint from {ckpt_path}")
         except Exception as error:
             if "feature_info" in str(error):
                 raise AttributeError(
@@ -145,7 +189,9 @@ class TimmBackbone(Backbone):
                 for i in range(len(out_indices))
             }
 
-            self._out_features = {"p{}".format(out_indices[i]) for i in range(len(out_indices))}
+            self._out_features = {
+                "p{}".format(out_indices[i]) for i in range(len(out_indices))
+            }
             self._out_feature_channels = {
                 feat: output_feature_channels[feat] for feat in self._out_features
             }
