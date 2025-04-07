@@ -25,7 +25,6 @@
 # https://github.com/facebookresearch/detectron2/blob/main/detectron2/modeling/backbone/backbone.py
 # ------------------------------------------------------------------------------------------------
 
-import warnings
 from typing import Tuple
 import torch.nn as nn
 
