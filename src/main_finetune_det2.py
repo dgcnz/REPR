@@ -14,6 +14,7 @@ in the config file and implement a new train_net.py to handle them.
 """
 
 import logging
+import torch
 
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import LazyConfig, instantiate
@@ -75,6 +76,9 @@ def do_train(args, cfg):
     logger = logging.getLogger("detectron2")
     logger.info("Model:\n{}".format(model))
     model.to(cfg.train.device)
+    if cfg.train.get("compile", False):
+        logger.info("Compiling model...")
+        model.backbone = torch.compile(model.backbone)
 
     cfg.optimizer.params.model = model
     optim = instantiate(cfg.optimizer)
