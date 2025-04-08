@@ -54,13 +54,13 @@ train.init_checkpoint = None
 
 train.float32_precision = "high"
 train.amp.precision = "16-mixed"
-train.accumulate_grad_batches = 1
+train.accumulate_grad_batches = 2
 train.max_iter = train.max_iter * 12 // 100  # 100ep -> 12ep
 lr_multiplier.scheduler.milestones = [
     milestone * 12 // 100 for milestone in lr_multiplier.scheduler.milestones
 ]
 lr_multiplier.scheduler.num_updates = train.max_iter
-dataloader.train.total_batch_size = 64
+dataloader.train.total_batch_size = 32
 optimizer.lr = 3e-4
 
 ## default:
