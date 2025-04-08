@@ -16,6 +16,7 @@ Key features:
 
 import logging
 import warnings
+import torch
 from detectron2.config import LazyConfig, instantiate
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.engine import (
@@ -66,7 +67,9 @@ def do_test(cfg, model):
 
 def do_train(fabric, args, cfg):
     # Instantiate model and move it to the proper device.
-    model = instantiate(cfg.model)
+    with fabric.init_module():
+        model = instantiate(cfg.model)
+
     logger.info("Model:\n{}".format(model))
     model.to(cfg.train.device)
 
@@ -81,6 +84,11 @@ def do_train(fabric, args, cfg):
         wandb.init(project="PART-detection", sync_tensorboard=True)
 
     # Setup model, optimizer, and dataloader with Fabric.
+    if cfg.train.get("compile", False):
+        model = model.to(fabric.device)
+        logger.info("Compiling model")
+        model.backbone = torch.compile(model.backbone)
+
     model, optimizer = fabric.setup(model, optimizer)
     if args.num_gpus > 1 and cfg.train.ddp.fp16_compression:
         # register comm hooks for DDP

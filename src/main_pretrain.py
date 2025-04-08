@@ -12,12 +12,12 @@ from lightning import Fabric
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
 import wandb
-
-rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-
 from src.utils import pylogger, extras, checkpointer
 from src.utils.instantiators import instantiate_callbacks, instantiate_loggers
 from src.engine_pretrain import train_one_epoch
+
+rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+
 
 log = pylogger.RankedLogger(__name__)
 
