@@ -13,6 +13,12 @@ model:
   _target_: src.models.components.partmae_v5_2.PARTMaskedAutoEncoderViT
   permute_segment_embed: True
 
+compile_kwargs:
+  fullgraph: True
+compile_expr:
+  "torch._subclasses.fake_tensor.CONSTANT_NUMEL_LIMIT": 10000
+  "torch._dynamo.config.optimize_ddp": True
+
 logger:
   wandb:
     project: "PART-pretrain"

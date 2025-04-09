@@ -4,7 +4,7 @@ import torch
 import rootutils
 from omegaconf import DictConfig, OmegaConf
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any
 from torchmetrics import Metric
 
 import lightning as L
@@ -88,9 +88,14 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
     metric_collection = hydra.utils.instantiate(cfg.metric_collection)
 
     if cfg.get("compile"):
-        torch._dynamo.config.optimize_ddp = False
-        # Disable ddp optimization
-        model = torch.compile(model)
+        for key, val in cfg.get("compile_expr", {}).items():
+            module_path, _, attr_name = key.rpartition('.')
+            print(f"Setting {key} to {val}")
+            setattr(__import__(module_path, fromlist=[attr_name]), attr_name, val)
+            
+        compile_kwargs = {"fullgraph": True}
+        compile_kwargs.update(cfg.get("compile_kwargs", {}))
+        model = torch.compile(model, **compile_kwargs)
 
     # Initialize optimizer
     log.info(f"Instantiating optimizer <{cfg.optimizer._target_}>")

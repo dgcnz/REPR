@@ -96,7 +96,7 @@ class PARTMaskedAutoEncoderViT(partmae_v5.PARTMaskedAutoEncoderViT):
         end_idx = list(accumulate(counts))
         start_idx = [0] + list(end_idx)[:-1]
         N_vis = [self._get_N(res)[0] for res in resolutions]
-        base_offset = list(accumulate(N_vis[i] * c for i, c in enumerate(counts)))
+        base_offset = list(accumulate([N_vis[i] * c for i, c in enumerate(counts)]))
         base_offset = [0] + list(accumulate(base_offset))[:-1]
 
         # Initialize accumulators and offsets.
