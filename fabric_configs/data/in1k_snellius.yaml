@@ -1,5 +1,5 @@
 defaults:
 - transform: basic_224
 
-_target_: torchvision.datasets.ImageFolder
+_target_: src.data.components.image_folder.ImageFolderNoLabels
 root: "/scratch-nvme/ml-datasets/imagenet/torchvision_ImageFolder/train"
