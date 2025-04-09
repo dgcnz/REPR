@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - /experiment/pretrain/imagenette/partmae_v5/vit_b_16/_base
+  - override /data/transform: multi_crop_v3
+
+tags: ["pretrain", "imagenette", "partmae_v5_2", "vit_b_16"]
+
+data:
+  transform:
+    distort_color: true
+
+model:
+  _target_: src.models.components.partmae_v5_2.PARTMaskedAutoEncoderViT
+  permute_segment_embed: True
+
+logger:
+  wandb:
+    project: "PART-pretrain"
+    group: "imagenette/partmae_v5_2/vit_b_16"

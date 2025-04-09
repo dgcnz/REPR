@@ -4,14 +4,14 @@ defaults:
   - /scheduler: cosine
   - /optimizer: adamw
   - override /data: imagenette
-  - override /model: pretrain/partmae_v4/vit_b_16_224
+  - override /model: pretrain/partmae_v5/vit_b_16_224
   - override /data/transform: multi_crop_v2
   - override /callbacks:
     - common/checkpoint
     - common/metric_logger
   - override /logger: wandb
 
-tags: ["pretrain", "imagenette", "partmae_v4", "vit_b_16"]
+tags: ["pretrain", "imagenette", "partmae_v5", "vit_b_16"]
 
 seed: 12345
 float32_matmul_precision: "high"
@@ -27,7 +27,6 @@ trainer:
   num_nodes: 1
   devices: 1
   gradient_clip_val: 0.3
-
 # mae/droppose blr
 # blr: 1.5e-4
 
@@ -40,6 +39,8 @@ model:
   pos_mask_ratio: 0.75
   sampler: stratified_jittered
   criterion: l1
+  alpha_s: 1.0
+  num_views: 6
 
 scheduler:
   warmup_t: 10 
@@ -62,4 +63,4 @@ metric_collection:
 logger:
   wandb:
     project: "PART-pretrain"
-    group: "imagenette/partmae_v4/vit_b_16"
+    group: "imagenette/partmae_v5/vit_b_16"

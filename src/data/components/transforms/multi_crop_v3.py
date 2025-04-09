@@ -4,10 +4,12 @@ from torch import Tensor
 import torch
 import parameterized_transforms.transforms as ptx
 import parameterized_transforms.wrappers as ptw
-from torch.utils.data import default_collate
+from src.data.components.transforms.pil_gaussian_blur import (
+    ParametrizedPILGaussianBlur,
+)
 
 
-class ParametrizedMultiCropV2(object):
+class ParametrizedMultiCropV3(object):
     def __init__(
         self,
         canonical_size: int = 512,
@@ -18,15 +20,30 @@ class ParametrizedMultiCropV2(object):
         local_crops_scale: tuple[float, float] = (0.05, 0.25),
         n_global_crops: int = 2,
         n_local_crops: int = 8,
+        distort_color: bool = False,
     ):
-        # scale params from
-        # https://dl.fbaipublicfiles.com/dino/dino_vitbase16_pretrain/args.txt
         self.canonical_size = canonical_size
         self.canonical_crop_scale = canonical_crop_scale
         self.global_crops_scale = global_crops_scale
         self.local_crops_scale = local_crops_scale
         self.n_global_crops = n_global_crops
         self.n_local_crops = n_local_crops
+
+        color_transforms = [
+            ptx.RandomApply(
+                [
+                    ptx.ColorJitter(
+                        brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1
+                    )
+                ],
+                p=0.8,
+            ),
+            ptx.RandomGrayscale(p=0.2),
+            ptx.RandomApply([ParametrizedPILGaussianBlur()], p=0.5),
+        ]
+        if not distort_color:
+            color_transforms = []
+
 
         self.canonicalize = ptw.CastParamsToTensor(
             transform=ptx.RandomResizedCrop(
@@ -47,6 +64,7 @@ class ParametrizedMultiCropV2(object):
                         scale=global_crops_scale,
                         interpolation=Image.BICUBIC,
                     ),
+                    *color_transforms,
                     normalize,
                 ]
             )
@@ -55,8 +73,11 @@ class ParametrizedMultiCropV2(object):
             transform=ptx.Compose(
                 [
                     ptx.RandomResizedCrop(
-                        local_size, scale=local_crops_scale, interpolation=Image.BICUBIC
+                        local_size,
+                        scale=local_crops_scale,
+                        interpolation=Image.BICUBIC,
                     ),
+                    *color_transforms,
                     normalize,
                 ]
             )
@@ -64,38 +85,36 @@ class ParametrizedMultiCropV2(object):
         self.max_scale_ratio = self.compute_max_scale_ratio_aug()
 
     def __call__(self, image: Image.Image):
-        Nl = self.n_local_crops
-        Ng = self.n_global_crops
-
+        # First, canonicalize the image.
         image, canon_params = self.canonicalize(image.convert("RGB"))
-        canon_params: Tensor = canon_params.unsqueeze(0)
+        # Make sure canon_params is a 2D tensor of shape [1, 4]
+        canon_params = canon_params.unsqueeze(0)
 
-        if self.n_global_crops > 0:
-            global_crops, global_params = default_collate(
-                [self.global_ttx(image) for _ in range(self.n_global_crops)]
-            )
-            global_params = torch.cat([canon_params.expand(Ng, -1), global_params], 1)
-        else:
-            global_crops = torch.tensor([])
-            global_params = torch.tensor([])
+        # Process global crops: each call returns a tuple (crop, crop_params)
+        global_results = [self.global_ttx(image) for _ in range(self.n_global_crops)]
+        global_crops = [result[0] for result in global_results]
+        # For each crop, prepend the canonical parameters to yield an 8-dim vector.
+        global_params = [
+            torch.cat([canon_params.squeeze(0), result[1]], dim=0)
+            for result in global_results
+        ]
 
-        if self.n_local_crops > 0:
-            local_crops, local_params = default_collate(
-                [self.local_ttx(image) for _ in range(self.n_local_crops)]
-            )
-            local_params = torch.cat([canon_params.expand(Nl, -1), local_params], 1)
-        else:
-            local_crops = torch.tensor([])
-            local_params = torch.tensor([])
+        # Process local crops similarly.
+        local_results = [self.local_ttx(image) for _ in range(self.n_local_crops)]
+        local_crops = [result[0] for result in local_results]
+        local_params = [
+            torch.cat([canon_params.squeeze(0), result[1]], dim=0)
+            for result in local_results
+        ]
 
-        return global_crops, global_params, local_crops, local_params
+        # Return lists concatenating global and local crops and parameters.
+        crops_list = global_crops + local_crops
+        params_list = global_params + local_params
+        return crops_list, params_list
 
     def recreate_local(
         self, canonical_img: Float[Tensor, "C H W"], local_params: Float[Tensor, "N 4"]
     ) -> Float[Tensor, "C H W"]:
-        """
-        Recreate the local image from the image and local parameters.
-        """
         return [
             self.local_ttx.transform.transforms[0].consume_transform(
                 canonical_img, local_params[i].tolist()
@@ -106,9 +125,6 @@ class ParametrizedMultiCropV2(object):
     def recreate_global(
         self, canonical_img: Float[Tensor, "C H W"], global_params: Float[Tensor, "N 4"]
     ) -> Float[Tensor, "C H W"]:
-        """
-        Recreate the global image from the image and global parameters.
-        """
         return [
             self.global_ttx.transform.transforms[0].consume_transform(
                 canonical_img, global_params[i].tolist()
@@ -119,9 +135,6 @@ class ParametrizedMultiCropV2(object):
     def recreate_canonical(
         self, image: Float[Tensor, "C H W"], canonical_params: Float[Tensor, "4"]
     ) -> Float[Tensor, "C H W"]:
-        """
-        Recreate the canonical image from the image and canonical parameters.
-        """
         return self.canonicalize.transform.consume_transform(
             image, canonical_params.tolist()
         )[0]
@@ -138,7 +151,9 @@ class ParametrizedMultiCropV2(object):
 
 
 if __name__ == "__main__":
-    t = ParametrizedMultiCropV2()
+    gV, lV = 2, 0
+    V = gV + lV
+    t = ParametrizedMultiCropV3(n_global_crops=gV, n_local_crops=lV, distort_color=True)
     print(t.compute_max_scale_ratio_aug())  # <5.97
 
     class MockedDataset(torch.utils.data.Dataset):
@@ -154,5 +169,16 @@ if __name__ == "__main__":
 
     dataset = MockedDataset(t)
     loader = torch.utils.data.DataLoader(dataset, batch_size=4)
-    batch = next(iter(loader))
-    print(batch[0].shape, batch[1].shape, batch[2].shape, batch[3].shape)
+    x, params = next(iter(loader))
+
+    for i in range(V):
+        print(x[i].shape)
+
+    for i in range(V):
+        print(params[i].shape)
+
+    # print without scientific notation
+    torch.set_printoptions(sci_mode=False)
+
+    print(params[0][0].shape)
+    print(params[0][0])

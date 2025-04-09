@@ -1,4 +1,4 @@
-from typing import Any, Dict, Iterable, Optional
+from typing import Optional
 
 from torch import Tensor, nn
 import torch
@@ -49,13 +49,6 @@ def train_one_epoch(
     }
     with tqdm(data_loader, **tqdm_kwargs) as pbar:
         for batch_idx, batch in enumerate(pbar):
-            if len(batch) == 2:
-                batch = batch[0]
-            elif len(batch) != 4:
-                raise ValueError(
-                    f"Expected 2 or 4 elements in batch, got {len(batch)}:\n{batch}"
-                )
-
             # Forward pass
             outputs = model(*batch)
             loss = outputs["loss"]
