@@ -29,9 +29,6 @@ def train_one_epoch(
     """Train model for one epoch. Logging and metrics are handled by callbacks."""
     model.train()
 
-    # Initialize optimizer
-    optimizer.zero_grad()
-
     # Wrap data loader with progress bar
     log.debug(f"on_train_epoch_start {epoch}")
     fabric.call(
@@ -42,52 +39,55 @@ def train_one_epoch(
         global_step=global_step,
         optimizer=optimizer,
     )
+
+    # Calculate number of optimization steps
+    n_steps = len(data_loader) // accum_iter
     tqdm_kwargs = {
-        "total": len(data_loader),
+        "total": n_steps,
         "desc": f"Epoch {epoch}",
         "disable": not fabric.is_global_zero,  # Only show progress bar on global zero
     }
-    with tqdm(data_loader, **tqdm_kwargs) as pbar:
-        for batch_idx, batch in enumerate(pbar):
-            # Forward pass
-            outputs = model(*batch)
-            loss = outputs["loss"]
 
-            # Scale loss for gradient accumulation
-            loss = loss / accum_iter
+    # Convert dataloader to iterator to handle manual batch fetching
+    data_iter = iter(data_loader)
 
-            # Check if this batch completes an accumulation cycle and requires optimizer step
-            is_optim_step = (batch_idx + 1) % accum_iter == 0
+    with tqdm(range(n_steps), **tqdm_kwargs) as pbar:
+        for step in pbar:
+            torch.compiler.cudagraph_mark_step_begin()  
+            optimizer.zero_grad()
 
-            # Backward pass with no_backward_sync when not taking optimizer step
-            with fabric.no_backward_sync(model, enabled=not is_optim_step):
-                fabric.backward(loss)
+            # Accumulate gradients over multiple batches
+            for i in range(accum_iter):
+                batch = next(data_iter)
 
+                outputs = model(*batch)
+                loss = outputs["loss"] / accum_iter
+
+                with fabric.no_backward_sync(model, enabled=bool(i < accum_iter - 1)):
+                    fabric.backward(loss)
+
+            # Process is now at the end of accumulation or dataset
             outputs = apply_to_collection(outputs, Tensor, lambda x: x.detach())
 
-            # Skip optimizer step if we're still accumulating
-            if not is_optim_step:
-                continue
-
-            # Gradient clipping
+            # Track gradient norm if requested
             if track_grad_norm:
                 outputs["grad_norm"] = _compute_grad_norm(model)
 
+            # Gradient clipping if enabled
             if clip_grad is not None and clip_grad > 0:
                 fabric.clip_gradients(model, optimizer, max_norm=clip_grad)
 
-
             # Optimizer step
             optimizer.step()
-            optimizer.zero_grad()
 
-            # Only increase global step when optimizer step is taken
+            # Update metrics and call callbacks
+            batch_idx = step * accum_iter  # Approximate batch index
             fabric.call(
                 "on_train_batch_end",
                 fabric=fabric,
                 model=model,
                 outputs=outputs,
-                batch=batch,
+                batch=batch,  # Last batch processed
                 batch_idx=batch_idx,
                 global_step=global_step,
                 epoch=epoch,
@@ -121,6 +121,7 @@ def _compute_grad_norm(model: nn.Module, norm_type: int = 2):
     """Compute the gradient norm of the model parameters."""
     parameters = [p for p in model.parameters() if p.grad is not None]
     grad_norm = torch.norm(
-        torch.stack([torch.norm(p.grad.detach(), norm_type) for p in parameters]), norm_type
+        torch.stack([torch.norm(p.grad.detach(), norm_type) for p in parameters]),
+        norm_type,
     )
     return grad_norm

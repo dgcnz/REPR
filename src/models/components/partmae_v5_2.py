@@ -28,20 +28,31 @@ class PARTMaskedAutoEncoderViT(partmae_v5.PARTMaskedAutoEncoderViT):
         B = pose_pred_nopos.shape[0]
         device = pose_pred_nopos.device
 
-        # Directly cast zip(*shapes) to a tensor.
-        _, Ms, Vs = torch.tensor(list(zip(*shapes)), device=device)
 
         # Build token crop sizes: for each group, create a (M*V, 1) tensor filled with the crop size.
         token_crop_sizes = torch.cat(
             [torch.full((M * V, 1), cs, device=device) for cs, M, V in shapes]
         )[None].expand(B, -1, -1)
 
-        # Total unique views and per-view repetition factors.
-        total_views = Vs.sum()
-        repeats = torch.repeat_interleave(Ms, Vs)
-        labels = torch.repeat_interleave(
-            torch.arange(total_views, device=device), repeats
-        )[None]
+        # # Directly cast zip(*shapes) to a tensor.
+        # _, Ms, Vs = list(zip(*shapes))
+        # # Total unique views and per-view repetition factors.
+        # repeats_list = list(chain.from_iterable([[m] * v for m, v in zip(Ms, Vs)]))
+        # label_list = list(
+        #     chain.from_iterable(([i] * r for i, r in enumerate(repeats_list)))
+        # )
+
+        label_list = []
+        label = 0
+        for cs, M, V in shapes:
+            # For each view in the current shape, repeat the current label M times.
+            for _ in range(V):
+                label_list.extend([label] * M)
+                label += 1
+
+
+        # Convert the computed list to a tensor on the correct device, adding a new dimension as needed.
+        labels = torch.tensor(label_list, device=device)[None]
 
         # Compute pairwise differences.
         pred_dT = self._compute_pred(pose_pred_nopos)
@@ -83,9 +94,12 @@ class PARTMaskedAutoEncoderViT(partmae_v5.PARTMaskedAutoEncoderViT):
     def forward(self, x, params) -> dict:
         # Ensure inputs are lists.
         x = x if isinstance(x, list) else [x]
+        device = x[0].device
         params = params if isinstance(params, list) else [params]
+
+        perm = torch.randperm(self.num_views, device=device)
         seg_embed_all = (
-            self.segment_embed[torch.randperm(self.num_views)]
+            self.segment_embed[perm]
             if self.permute_segment_embed
             else self.segment_embed
         )
@@ -120,7 +134,7 @@ class PARTMaskedAutoEncoderViT(partmae_v5.PARTMaskedAutoEncoderViT):
             flat_positions = enc["patch_positions_vis"].flatten(1, 2)
             M = enc["ids_remove_pos"].shape[2]
             view_offsets = (
-                torch.arange(count, device=enc["ids_remove_pos"].device) * N_vis[ix]
+                torch.arange(count, device=device) * N_vis[ix]
             ).view(1, count, 1)
             flat_ids_remove = (
                 enc["ids_remove_pos"] + view_offsets + base_offset[ix]
