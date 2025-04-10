@@ -9,6 +9,7 @@ defaults:
   - override /callbacks:
     - common/checkpoint
     - common/metric_logger
+    - common/iter_timer
   - override /logger: wandb
 
 tags: ["pretrain", "imagenet1k", "partmae_v5", "vit_b_16"]
@@ -20,6 +21,10 @@ cudnn_benchmark: True
 callbacks:
   checkpoint: 
     every_n_epochs: 25
+  metric_logger:
+    every_n_steps: 25
+  iter_timer:
+    every_n_steps: 25
 
 trainer:
   max_epochs: ???

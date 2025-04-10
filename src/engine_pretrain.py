@@ -12,7 +12,6 @@ from src.utils import pylogger
 
 log = pylogger.RankedLogger(__name__)
 
-
 def train_one_epoch(
     fabric: Fabric,
     model: nn.Module,
@@ -50,6 +49,7 @@ def train_one_epoch(
 
     # Convert dataloader to iterator to handle manual batch fetching
     data_iter = iter(data_loader)
+    # warmup for compile
 
     with tqdm(range(n_steps), **tqdm_kwargs) as pbar:
         for step in pbar:
@@ -81,14 +81,13 @@ def train_one_epoch(
             optimizer.step()
 
             # Update metrics and call callbacks
-            batch_idx = step * accum_iter  # Approximate batch index
             fabric.call(
                 "on_train_batch_end",
                 fabric=fabric,
                 model=model,
                 outputs=outputs,
                 batch=batch,  # Last batch processed
-                batch_idx=batch_idx,
+                batch_idx=step * accum_iter,
                 global_step=global_step,
                 epoch=epoch,
                 metric_collection=metric_collection,
