@@ -98,6 +98,7 @@ def train_one_epoch(
                 global_step=global_step,
                 epoch=epoch,
                 metric_collection=metric_collection,
+                optimizer=optimizer,
             )
 
             global_step += 1

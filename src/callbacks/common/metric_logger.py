@@ -48,6 +48,7 @@ class MetricLogger(object):
         outputs: Dict,
         metric_collection: Metric,
         batch_idx: int,
+        optimizer: torch.optim.Optimizer,
         **kwargs,
     ) -> None:
         """Update metrics at the end of each training batch."""
@@ -58,6 +59,7 @@ class MetricLogger(object):
                 global_step,
                 metric_collection,
                 epoch,
+                optimizer,
             )
 
     def on_train_epoch_end(
@@ -66,6 +68,7 @@ class MetricLogger(object):
         global_step: int,
         epoch: int,
         metric_collection: Metric,
+        optimizer: torch.optim.Optimizer,
         **kwargs,
     ) -> None:
         self._compute_and_log(
@@ -73,6 +76,7 @@ class MetricLogger(object):
             global_step,
             metric_collection,
             epoch,
+            optimizer,
         )
         metric_collection.reset()
 
@@ -82,9 +86,11 @@ class MetricLogger(object):
         global_step: int,
         metric_collection: Metric,
         epoch: int,
+        optimizer: torch.optim.Optimizer,
     ) -> None:
         """Compute and log metrics."""
         final_metrics = metric_collection.compute()
         train_metrics = {f"train/{k}": v for k, v in final_metrics.items()}
         train_metrics["epoch"] = epoch
         self._log(fabric, global_step, train_metrics)
+        self._log_lr(fabric, global_step, optimizer)
