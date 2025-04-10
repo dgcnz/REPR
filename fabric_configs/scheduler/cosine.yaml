@@ -12,11 +12,11 @@ cycle_decay: 0.1
 # warmup_lr_init=args.warmup_lr,
 warmup_lr_init: 1e-5
 # warmup_t=args.warmup_epochs,
-warmup_t: 5
+warmup_t: ???
 # cycle_limit=getattr(args, 'lr_cycle_limit', 1),
 cycle_limit: 1
 # t_in_epochs=True,
-t_in_epochs: True
+t_in_epochs: False
 # noise_range_t=noise_range,
 noise_range_t: null
 # noise_pct=getattr(args, 'lr_noise_pct', 0.67),

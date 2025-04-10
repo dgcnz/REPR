@@ -11,10 +11,11 @@ trainer:
   accelerator: gpu
   strategy: ddp
   num_nodes: 1
-  devices: 2
+  devices: 4
 
 scheduler:
-  warmup_t: 10
+  warmup_t: 6250 # 10 epochs * 625 steps/epoch
+  t_initial: 125000 # 200 epochs * 625 steps/epoch
 
 train_dataloader:
   batch_size: 512

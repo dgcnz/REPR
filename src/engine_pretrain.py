@@ -1,8 +1,11 @@
 from typing import Optional
 
+import timm.scheduler
+import timm.scheduler.scheduler
 from torch import Tensor, nn
 import torch
 from lightning import Fabric
+import timm
 from lightning.fabric.utilities.apply_func import apply_to_collection
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -20,7 +23,7 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     epoch: int,
     global_step: int,
-    scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
+    scheduler: Optional[timm.scheduler.scheduler.Scheduler] = None,
     accum_iter: int = 1,
     clip_grad: float = 0.0,
     track_grad_norm: bool = False,
@@ -80,6 +83,10 @@ def train_one_epoch(
             # Optimizer step
             optimizer.step()
 
+            log.debug(f"Scheduler step {epoch}.")
+            if scheduler is not None:
+                scheduler.step_update(global_step + 1)
+
             # Update metrics and call callbacks
             fabric.call(
                 "on_train_batch_end",
@@ -107,9 +114,6 @@ def train_one_epoch(
         metric_collection=metric_collection,
     )
 
-    log.debug(f"Scheduler step {epoch}.")
-    if scheduler is not None:
-        scheduler.step(epoch=epoch)
 
     log.debug(f"Finished train_one_epoch {epoch}.")
     return global_step

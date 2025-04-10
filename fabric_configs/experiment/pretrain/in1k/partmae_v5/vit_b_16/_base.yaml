@@ -48,8 +48,8 @@ model:
   num_views: 6
 
 scheduler:
-  warmup_t: 10 
-  t_initial: 200 # 800 epochs?
+  warmup_t: ??? 
+  t_initial: ??? # 800 epochs?
   warmup_lr_init: 1e-5
 
 optimizer:
