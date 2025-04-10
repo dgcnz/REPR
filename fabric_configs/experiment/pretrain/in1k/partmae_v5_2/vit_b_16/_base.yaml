@@ -15,9 +15,10 @@ model:
 
 compile_kwargs:
   fullgraph: True
+  mode: default
 compile_expr:
   "torch._subclasses.fake_tensor.CONSTANT_NUMEL_LIMIT": 100000
-  "torch._dynamo.config.optimize_ddp": python_reducer
+  "torch._dynamo.config.optimize_ddp": python-reducer
   "torch._dynamo.config.compiled_autograd": True
 
 logger:
