@@ -5,6 +5,9 @@ import torch
 import parameterized_transforms.transforms as ptx
 import parameterized_transforms.wrappers as ptw
 from torch.utils.data import default_collate
+from src.data.components.transforms.pil_gaussian_blur import (
+    ParametrizedPILGaussianBlur,
+)
 
 
 class ParametrizedMultiCropV2(object):
@@ -18,6 +21,7 @@ class ParametrizedMultiCropV2(object):
         local_crops_scale: tuple[float, float] = (0.05, 0.25),
         n_global_crops: int = 2,
         n_local_crops: int = 8,
+        distort_color: bool = False,
     ):
         # scale params from
         # https://dl.fbaipublicfiles.com/dino/dino_vitbase16_pretrain/args.txt
@@ -39,6 +43,22 @@ class ParametrizedMultiCropV2(object):
                 ptx.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
             ]
         )
+
+        color_transforms = [
+            ptx.RandomApply(
+                [
+                    ptx.ColorJitter(
+                        brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1
+                    )
+                ],
+                p=0.8,
+            ),
+            ptx.RandomGrayscale(p=0.2),
+            ptx.RandomApply([ParametrizedPILGaussianBlur()], p=0.5),
+        ]
+        if not distort_color:
+            color_transforms = []
+
         self.global_ttx = ptw.CastParamsToTensor(
             transform=ptx.Compose(
                 [
@@ -47,6 +67,7 @@ class ParametrizedMultiCropV2(object):
                         scale=global_crops_scale,
                         interpolation=Image.BICUBIC,
                     ),
+                    *color_transforms,
                     normalize,
                 ]
             )
@@ -57,6 +78,7 @@ class ParametrizedMultiCropV2(object):
                     ptx.RandomResizedCrop(
                         local_size, scale=local_crops_scale, interpolation=Image.BICUBIC
                     ),
+                    *color_transforms,
                     normalize,
                 ]
             )
@@ -70,23 +92,15 @@ class ParametrizedMultiCropV2(object):
         image, canon_params = self.canonicalize(image.convert("RGB"))
         canon_params: Tensor = canon_params.unsqueeze(0)
 
-        if self.n_global_crops > 0:
-            global_crops, global_params = default_collate(
-                [self.global_ttx(image) for _ in range(self.n_global_crops)]
-            )
-            global_params = torch.cat([canon_params.expand(Ng, -1), global_params], 1)
-        else:
-            global_crops = torch.tensor([])
-            global_params = torch.tensor([])
+        global_crops, global_params = default_collate(
+            [self.global_ttx(image) for _ in range(self.n_global_crops)]
+        )
+        global_params = torch.cat([canon_params.expand(Ng, -1), global_params], 1)
 
-        if self.n_local_crops > 0:
-            local_crops, local_params = default_collate(
-                [self.local_ttx(image) for _ in range(self.n_local_crops)]
-            )
-            local_params = torch.cat([canon_params.expand(Nl, -1), local_params], 1)
-        else:
-            local_crops = torch.tensor([])
-            local_params = torch.tensor([])
+        local_crops, local_params = default_collate(
+            [self.local_ttx(image) for _ in range(self.n_local_crops)]
+        )
+        local_params = torch.cat([canon_params.expand(Nl, -1), local_params], 1)
 
         return global_crops, global_params, local_crops, local_params
 
@@ -138,7 +152,7 @@ class ParametrizedMultiCropV2(object):
 
 
 if __name__ == "__main__":
-    t = ParametrizedMultiCropV2()
+    t = ParametrizedMultiCropV2(distort_color=True)
     print(t.compute_max_scale_ratio_aug())  # <5.97
 
     class MockedDataset(torch.utils.data.Dataset):
@@ -154,5 +168,7 @@ if __name__ == "__main__":
 
     dataset = MockedDataset(t)
     loader = torch.utils.data.DataLoader(dataset, batch_size=4)
-    batch = next(iter(loader))
-    print(batch[0].shape, batch[1].shape, batch[2].shape, batch[3].shape)
+    gx, gp, lx, lp = next(iter(loader))
+    torch.set_printoptions(sci_mode=False)
+    print(gp)    
+    print(lp)

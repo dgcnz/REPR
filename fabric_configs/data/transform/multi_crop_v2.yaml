@@ -11,3 +11,4 @@ local_crops_scale:
   - 0.3
 n_global_crops: 1
 n_local_crops: 5
+distort_color: false

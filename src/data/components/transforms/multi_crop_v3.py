@@ -1,89 +1,9 @@
 from PIL import Image
-from jaxtyping import Float
-from torch import Tensor
 import torch
-import parameterized_transforms.transforms as ptx
-import parameterized_transforms.wrappers as ptw
-from src.data.components.transforms.pil_gaussian_blur import (
-    ParametrizedPILGaussianBlur,
-)
+from src.data.components.transforms.multi_crop_v2 import ParametrizedMultiCropV2
 
 
-class ParametrizedMultiCropV3(object):
-    def __init__(
-        self,
-        canonical_size: int = 512,
-        global_size: int = 224,
-        local_size: int = 96,
-        canonical_crop_scale=(0.9, 1.0),
-        global_crops_scale: tuple[float, float] = (0.25, 1.0),
-        local_crops_scale: tuple[float, float] = (0.05, 0.25),
-        n_global_crops: int = 2,
-        n_local_crops: int = 8,
-        distort_color: bool = False,
-    ):
-        self.canonical_size = canonical_size
-        self.canonical_crop_scale = canonical_crop_scale
-        self.global_crops_scale = global_crops_scale
-        self.local_crops_scale = local_crops_scale
-        self.n_global_crops = n_global_crops
-        self.n_local_crops = n_local_crops
-
-        color_transforms = [
-            ptx.RandomApply(
-                [
-                    ptx.ColorJitter(
-                        brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1
-                    )
-                ],
-                p=0.8,
-            ),
-            ptx.RandomGrayscale(p=0.2),
-            ptx.RandomApply([ParametrizedPILGaussianBlur()], p=0.5),
-        ]
-        if not distort_color:
-            color_transforms = []
-
-
-        self.canonicalize = ptw.CastParamsToTensor(
-            transform=ptx.RandomResizedCrop(
-                canonical_size, scale=canonical_crop_scale, interpolation=Image.BICUBIC
-            )
-        )
-        normalize = ptx.Compose(
-            [
-                ptx.ToTensor(),
-                ptx.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-            ]
-        )
-        self.global_ttx = ptw.CastParamsToTensor(
-            transform=ptx.Compose(
-                [
-                    ptx.RandomResizedCrop(
-                        global_size,
-                        scale=global_crops_scale,
-                        interpolation=Image.BICUBIC,
-                    ),
-                    *color_transforms,
-                    normalize,
-                ]
-            )
-        )
-        self.local_ttx = ptw.CastParamsToTensor(
-            transform=ptx.Compose(
-                [
-                    ptx.RandomResizedCrop(
-                        local_size,
-                        scale=local_crops_scale,
-                        interpolation=Image.BICUBIC,
-                    ),
-                    *color_transforms,
-                    normalize,
-                ]
-            )
-        )
-        self.max_scale_ratio = self.compute_max_scale_ratio_aug()
-
+class ParametrizedMultiCropV3(ParametrizedMultiCropV2):
     def __call__(self, image: Image.Image):
         # First, canonicalize the image.
         image, canon_params = self.canonicalize(image.convert("RGB"))
@@ -111,43 +31,6 @@ class ParametrizedMultiCropV3(object):
         crops_list = global_crops + local_crops
         params_list = global_params + local_params
         return crops_list, params_list
-
-    def recreate_local(
-        self, canonical_img: Float[Tensor, "C H W"], local_params: Float[Tensor, "N 4"]
-    ) -> Float[Tensor, "C H W"]:
-        return [
-            self.local_ttx.transform.transforms[0].consume_transform(
-                canonical_img, local_params[i].tolist()
-            )[0]
-            for i in range(local_params.shape[0])
-        ]
-
-    def recreate_global(
-        self, canonical_img: Float[Tensor, "C H W"], global_params: Float[Tensor, "N 4"]
-    ) -> Float[Tensor, "C H W"]:
-        return [
-            self.global_ttx.transform.transforms[0].consume_transform(
-                canonical_img, global_params[i].tolist()
-            )[0]
-            for i in range(global_params.shape[0])
-        ]
-
-    def recreate_canonical(
-        self, image: Float[Tensor, "C H W"], canonical_params: Float[Tensor, "4"]
-    ) -> Float[Tensor, "C H W"]:
-        return self.canonicalize.transform.consume_transform(
-            image, canonical_params.tolist()
-        )[0]
-
-    def compute_max_scale_ratio_aug(self) -> float:
-        grrc = self.global_ttx.transform.transforms[0]
-        lrrc = self.local_ttx.transform.transforms[0]
-        scale_min = min(*grrc.scale, *lrrc.scale)
-        scale_max = max(*grrc.scale, *lrrc.scale)
-        ratio_min = min(*grrc.ratio, *lrrc.ratio)
-        ratio_max = max(*grrc.ratio, *lrrc.ratio)
-        max_ratio = ((scale_max * ratio_max) / (scale_min * ratio_min)) ** 0.5
-        return max_ratio
 
 
 if __name__ == "__main__":

@@ -46,6 +46,11 @@ model:
   criterion: l1
   alpha_s: 1.0
   num_views: 6
+  permute_segment_embed: True
+
+data:
+  transform:
+    distort_color: true
 
 scheduler:
   warmup_t: ??? 

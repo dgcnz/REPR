@@ -1,7 +1,6 @@
 import torch
 from torch import nn, Tensor
 from functools import partial
-from torch.nn.modules.utils import _pair
 from src.models.components import partmae_v5
 
 
