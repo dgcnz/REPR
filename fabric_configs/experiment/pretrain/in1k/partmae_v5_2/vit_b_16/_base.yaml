@@ -5,21 +5,8 @@ defaults:
 
 tags: ["pretrain", "imagenet1k", "partmae_v5_2", "vit_b_16"]
 
-data:
-  transform:
-    distort_color: true
-
 model:
   _target_: src.models.components.partmae_v5_2.PARTMaskedAutoEncoderViT
-  permute_segment_embed: True
-
-compile_kwargs:
-  fullgraph: True
-  mode: default
-compile_expr:
-  "torch._subclasses.fake_tensor.CONSTANT_NUMEL_LIMIT": 100000
-  "torch._dynamo.config.optimize_ddp": "python_reducer"
-  "torch._dynamo.config.compiled_autograd": True
 
 logger:
   wandb:

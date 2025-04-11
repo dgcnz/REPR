@@ -26,12 +26,17 @@ callbacks:
   iter_timer:
     every_n_steps: 25
 
+data:
+  transform:
+    distort_color: true
+
 trainer:
   max_epochs: ???
   accumulate_grad_batches: ???
   num_nodes: 1
   devices: 1
   gradient_clip_val: 0.3
+
 # mae/droppose blr
 # blr: 1.5e-4
 
@@ -47,10 +52,6 @@ model:
   alpha_s: 1.0
   num_views: 6
   permute_segment_embed: True
-
-data:
-  transform:
-    distort_color: true
 
 scheduler:
   warmup_t: ??? 
@@ -69,6 +70,14 @@ train_dataloader:
 
 metric_collection:
   _target_: src.models.components.metrics.partmae_v3.V3Metrics
+
+compile_kwargs:
+  fullgraph: True
+  mode: default
+compile_expr:
+  "torch._subclasses.fake_tensor.CONSTANT_NUMEL_LIMIT": 100000
+  "torch._dynamo.config.optimize_ddp": "python_reducer"
+  "torch._dynamo.config.compiled_autograd": True
 
 logger:
   wandb:

@@ -14,8 +14,9 @@ trainer:
   # accumulate_grad_batches: 8
 
 scheduler:
-  warmup_t: 10
+  warmup_t: 6250 # 10 epochs * 625 steps/epoch
+  t_initial: 125000 # 200 epochs * 625 steps/epoch
 
 train_dataloader:
-  batch_size: 256
+  batch_size: 512
   num_workers: 16
