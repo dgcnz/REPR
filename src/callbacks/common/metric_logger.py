@@ -17,7 +17,6 @@ class MetricLogger(object):
         self, fabric: Fabric, metric_collection: Metric, **kwargs
     ) -> None:
         """Initialize metrics at the start of training."""
-        # TODO: maybe needs a .to(fabric.device)
         metric_collection.reset()
 
     def _log(self, fabric: Fabric, global_step: int, metrics: dict[str, Any]):
@@ -78,7 +77,6 @@ class MetricLogger(object):
             epoch,
             optimizer,
         )
-        metric_collection.reset()
 
     def _compute_and_log(
         self,
@@ -94,3 +92,4 @@ class MetricLogger(object):
         train_metrics["epoch"] = epoch
         self._log(fabric, global_step, train_metrics)
         self._log_lr(fabric, global_step, optimizer)
+        metric_collection.reset()
