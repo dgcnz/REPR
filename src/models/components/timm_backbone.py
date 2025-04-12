@@ -157,6 +157,9 @@ class TimmBackbone(Backbone):
                     assert len(unex) < 4, f"Unexpected keys: {unex}"
                 
                 logger.info(f"Loaded checkpoint from {ckpt_path}")
+            else:
+                logger.info("Checkpoint path is empty, not loading checkpoint")
+
         except Exception as error:
             if "feature_info" in str(error):
                 raise AttributeError(
