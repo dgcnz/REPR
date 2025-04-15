@@ -27,8 +27,8 @@ srun python -m src.main_pretrain \
     --config-name config.yaml \
     ckpt_path=/gpfs/home2/dcanez/development/PART/outputs/2025-04-11/10-15-16/epoch_0199.ckpt \
     +model.freeze_encoder=true \
-    "~logger.wandb.id" \
-    "~scheduler" \
+    ~logger.wandb.id \
+    ~scheduler \
     data.transform.n_global_crops=2 \
     data.transform.n_local_crops=0 \
     trainer.max_epochs=300 \
