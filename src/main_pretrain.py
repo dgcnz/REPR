@@ -87,7 +87,7 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
 
     metric_collection = hydra.utils.instantiate(cfg.metric_collection)
 
-    if cfg.get("compile"):
+    if cfg.get("compile", False):
         for key, val in cfg.get("compile_expr", {}).items():
             module_path, _, attr_name = key.rpartition('.')
             print(f"Setting {key} to {val}")
@@ -95,7 +95,15 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
             
         compile_kwargs = {"fullgraph": True}
         compile_kwargs.update(cfg.get("compile_kwargs", {}))
-        model = torch.compile(model, **compile_kwargs)
+        if compile_fn := cfg.get("compile_fn", ""):
+            # Compile a specific function of the model
+            original_fn = getattr(model, compile_fn)
+            compiled_fn = torch.compile(original_fn, **compile_kwargs)
+            setattr(model, compile_fn, compiled_fn)
+        else:
+            # compile full model
+            model = torch.compile(model, **compile_kwargs)
+        
 
     # Initialize optimizer
     log.info(f"Instantiating optimizer <{cfg.optimizer._target_}>")

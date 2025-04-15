@@ -52,7 +52,6 @@ def train_one_epoch(
 
     # Convert dataloader to iterator to handle manual batch fetching
     data_iter = iter(data_loader)
-    # warmup for compile
 
     with tqdm(range(n_steps), **tqdm_kwargs) as pbar:
         for step in pbar:
