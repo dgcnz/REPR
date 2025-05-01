@@ -1,0 +1,6 @@
+defaults:
+- transform: basic_224
+
+_target_: src.data.components.glob_dataset.GlobImageDataset
+root: ???
+pattern: "**/*_[0-9][0-9][0-9][0-9][0-9][0-9]_0003.png"

@@ -1,0 +1,87 @@
+# @package _global_
+
+defaults:
+  - /scheduler: cosine
+  - /optimizer: adamw
+  - override /data: clevrtexv2_outd
+  - override /model: pretrain/partmae_v5/vit_b_16_224
+  - override /data/transform: multi_crop_v2
+  - override /callbacks:
+    - common/checkpoint
+    - common/metric_logger
+    - common/iter_timer
+  - override /logger: wandb
+
+tags: ["pretrain", "clevrtexv2_outd", "partmae_v5", "vit_b_16"]
+
+seed: 12345
+float32_matmul_precision: "high"
+cudnn_benchmark: True
+
+callbacks:
+  checkpoint: 
+    every_n_epochs: 25
+  metric_logger:
+    every_n_steps: 25
+  iter_timer:
+    every_n_steps: 25
+
+data:
+  root: ??? # depends on snellius or local
+  transform:
+    distort_color: true
+
+trainer:
+  max_epochs: ???
+  accumulate_grad_batches: ???
+  num_nodes: 1
+  devices: 1
+  gradient_clip_val: 0.3
+
+# mae/droppose blr
+# blr: 1.5e-4
+
+# dino blr
+# with gV=2, lV=10, this is effectively ~1.5e-4
+blr: 1e-4 
+
+model:
+  mask_ratio: 0.75
+  pos_mask_ratio: 0.75
+  sampler: stratified_jittered
+  criterion: l1
+  alpha_s: 1.0
+  num_views: 6
+  segment_embed_mode: none
+  apply_tanh: false
+
+scheduler:
+  warmup_t: ??? 
+  t_initial: ??? # 800 epochs?
+  warmup_lr_init: 1e-5
+
+optimizer:
+  lr: ${eval:${blr} * ${trainer.accumulate_grad_batches} * ${trainer.num_nodes} * ${trainer.devices} * ${train_dataloader.batch_size}  / 256}
+  weight_decay: 0.05
+
+train_dataloader:
+  pin_memory: true
+  batch_size: ???
+  num_workers: ???
+  drop_last: true
+
+metric_collection:
+  _target_: src.models.components.metrics.partmae_v3.V3Metrics
+
+compile_kwargs:
+  fullgraph: True
+  mode: default
+compile_expr:
+  "torch._subclasses.fake_tensor.CONSTANT_NUMEL_LIMIT": 100000
+  "torch._dynamo.config.optimize_ddp": "python_reducer"
+  "torch._dynamo.config.compiled_autograd": True
+
+logger:
+  wandb:
+    project: "PART-pretrain"
+    group: "clevrtexv2_outd/partmae_v5/vit_b_16"
