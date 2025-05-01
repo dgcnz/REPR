@@ -100,7 +100,7 @@ class PARTMaskedAutoEncoderViT(partmae_v5.PARTMaskedAutoEncoderViT):
         perm = torch.randperm(self.num_views, device=device)
         seg_embed_all = (
             self.segment_embed[perm]
-            if self.permute_segment_embed
+            if self.segment_embed_mode == "permute"
             else self.segment_embed
         )
 
@@ -196,9 +196,10 @@ PART_mae_vit_base_patch16 = (
 if __name__ == "__main__":
     from src.data.components.transforms.multi_crop_v3 import ParametrizedMultiCropV3
     from PIL import Image
+    import torch.utils._pytree as pytree
 
-    backbone = PART_mae_vit_base_patch16(pos_mask_ratio=0.75, mask_ratio=0.75)
-    gV, lV = 2, 0
+    backbone = PART_mae_vit_base_patch16(pos_mask_ratio=0.75, mask_ratio=0.75).cuda()
+    gV, lV = 2, 4
     V = gV + lV
     t = ParametrizedMultiCropV3(n_global_crops=gV, n_local_crops=lV, distort_color=True)
     print(t.compute_max_scale_ratio_aug())  # <5.97
@@ -217,5 +218,9 @@ if __name__ == "__main__":
     dataset = MockedDataset(t)
     loader = torch.utils.data.DataLoader(dataset, batch_size=4)
     batch = next(iter(loader))
+    batch = pytree.tree_map_only(
+        Tensor, lambda x: x.cuda(), batch
+    )  # Move to GPU if available
+    
     out = backbone(*batch)
     print("Output keys:", out.keys())

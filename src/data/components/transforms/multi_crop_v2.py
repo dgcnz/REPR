@@ -19,9 +19,10 @@ class ParametrizedMultiCropV2(object):
         canonical_crop_scale=(0.9, 1.0),
         global_crops_scale: tuple[float, float] = (0.25, 1.0),
         local_crops_scale: tuple[float, float] = (0.05, 0.25),
-        n_global_crops: int = 2,
-        n_local_crops: int = 8,
+        n_global_crops: int = 1,
+        n_local_crops: int = 5,
         distort_color: bool = False,
+        
     ):
         # scale params from
         # https://dl.fbaipublicfiles.com/dino/dino_vitbase16_pretrain/args.txt

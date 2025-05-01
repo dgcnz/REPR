@@ -17,7 +17,7 @@ from src.models.components.utils.offgrid_pos_embed import (
 )
 from torch.nn.modules.utils import _pair
 from jaxtyping import Int, Float
-import warnings
+from typing import Literal
 
 SAMPLERS = {
     "random": random_sampling,
@@ -57,8 +57,9 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         verbose: bool = False,
         num_views: int = 6,  # default is 1 global 5 local
         # TODO: remove after 200ep training of old model
-        permute_segment_embed: bool = False,
+        segment_embed_mode: Literal["permute", "none", "fixed"] = "none",
         freeze_encoder: bool = False,
+        apply_tanh: bool = True,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -121,18 +122,17 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.num_targets = 4
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, self.num_targets, bias=False)
-        self.tanh = nn.Tanh()
+        self.apply_tanh = apply_tanh
+        self.tanh = nn.Tanh() if self.apply_tanh else nn.Identity()
         self.verbose = verbose
 
         # Instead of using nn.Embedding, use a raw parameter for view-specific segment embeddings.
         self.num_views = num_views
-        self.segment_embed = nn.Parameter(torch.randn(num_views, embed_dim))
-        self.permute_segment_embed = permute_segment_embed
-        if not permute_segment_embed:
-            warnings.warn(
-                "permute_segment_embed is set to False. "
-                "This should be set to True to avoid overfitting to order in views."
-            )
+        self.segment_embed_mode = segment_embed_mode
+        if self.segment_embed_mode == "none":
+            self.register_buffer("segment_embed", torch.zeros(num_views, embed_dim))
+        else:
+            self.segment_embed = nn.Parameter(torch.randn(num_views, embed_dim))
 
         self.initialize_weights()
         if freeze_encoder:
@@ -539,7 +539,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         g_enc = self.encode_views(g_x)
         l_enc = self.encode_views(l_x)
 
-        if self.permute_segment_embed:
+        if self.segment_embed_mode == "permute":
             # Total number of segment embeddings is self.num_views
             perm = torch.randperm(self.num_views)
 
