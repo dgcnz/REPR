@@ -28,41 +28,35 @@ class PARTMaskedAutoEncoderViT(partmae_v5.PARTMaskedAutoEncoderViT):
         B = pose_pred_nopos.shape[0]
         device = pose_pred_nopos.device
 
+        # Build labels list in Python to avoid data-dependent tensor creation.
+        # resgroup_idx  is the resolution group index
+        # in_resgroup_idx is the index of the view within that group
+        resgroup_idx, in_resgroup_idx = torch.tensor(
+            [
+                (i, j)
+                for i, (_, M, V) in enumerate(shapes)
+                for j in range(V)  # each view in that group
+                for _ in range(M)  # one entry per patch
+            ],
+            device=device,
+        ).unbind(1)
+
+        # Build intra- and inter-view masks
+        # mask tells use which patches belong to the same view
+        mask = resgroup_idx[:, None] == resgroup_idx[None, :]
+        mask = mask & (in_resgroup_idx[:, None] == in_resgroup_idx[None, :])
+        mask = mask.float()[None, ..., None].expand(B, -1, -1, 1)
+        diag, offdiag = mask.sum(), (1 - mask).sum()
 
         # Build token crop sizes: for each group, create a (M*V, 1) tensor filled with the crop size.
         token_crop_sizes = torch.cat(
             [torch.full((M * V, 1), cs, device=device) for cs, M, V in shapes]
         )[None].expand(B, -1, -1)
 
-        # # Directly cast zip(*shapes) to a tensor.
-        # _, Ms, Vs = list(zip(*shapes))
-        # # Total unique views and per-view repetition factors.
-        # repeats_list = list(chain.from_iterable([[m] * v for m, v in zip(Ms, Vs)]))
-        # label_list = list(
-        #     chain.from_iterable(([i] * r for i, r in enumerate(repeats_list)))
-        # )
-
-        label_list = []
-        label = 0
-        for cs, M, V in shapes:
-            # For each view in the current shape, repeat the current label M times.
-            for _ in range(V):
-                label_list.extend([label] * M)
-                label += 1
-
-
-        # Convert the computed list to a tensor on the correct device, adding a new dimension as needed.
-        labels = torch.tensor(label_list, device=device)[None]
-
         # Compute pairwise differences.
         pred_dT = self._compute_pred(pose_pred_nopos)
         gt_dT = self._compute_gt(patch_pos_nopos, params, token_crop_sizes)
         loss_full = self.criterion(pred_dT, gt_dT, reduction="none")
-
-        # Build intra- and inter-view masks.
-        mask = (labels.unsqueeze(2) == labels.unsqueeze(1)).float().unsqueeze(-1)
-        mask = mask.expand(B, -1, -1, 1)
-        diag, offdiag = mask.sum(), (1 - mask).sum()
 
         # Compute loss components for translation and scale.
         loss_intra_t = (loss_full[..., :2] * mask).sum() / diag
@@ -91,71 +85,75 @@ class PARTMaskedAutoEncoderViT(partmae_v5.PARTMaskedAutoEncoderViT):
         N_pos = int(N_vis * (1 - self.pos_mask_ratio))
         return N_vis, N_vis - N_pos
 
-    def forward(self, x, params) -> dict:
-        # Ensure inputs are lists.
-        x = x if isinstance(x, list) else [x]
+    def _encode_group(self, x, params, indices, seg_embed, base_offset, N_vis):
         device = x[0].device
-        params = params if isinstance(params, list) else [params]
+        group_x = torch.stack([x[i] for i in indices], dim=1)
+        group_params = torch.stack([params[i] for i in indices], dim=1)
+        enc = self.encode_views(group_x)
+        enc["z_enc"] = enc["z_enc"] + seg_embed[indices].unsqueeze(0).unsqueeze(2)
 
-        perm = torch.randperm(self.num_views, device=device)
-        seg_embed_all = (
-            self.segment_embed[perm]
-            if self.segment_embed_mode == "permute"
-            else self.segment_embed
+        B = group_x.shape[0]
+        cls_tokens = enc["z_enc"][:, :, 0, :]
+        flat_patches = enc["z_enc"][:, :, 1:, :].flatten(1, 2)
+        flat_positions = enc["patch_positions_vis"].flatten(1, 2)
+
+        M = enc["ids_remove_pos"].shape[2]
+        view_offsets = (torch.arange(len(indices), device=device) * N_vis).view(
+            1, len(indices), 1
+        )
+        flat_ids_remove = (enc["ids_remove_pos"] + view_offsets + base_offset).view(
+            B, -1
         )
 
-        # Determine group counts based on resolution (assumes x is ordered by resolution).
+        expanded_params = (
+            group_params[:, :, 4:8].unsqueeze(2).expand(-1, -1, M, -1).flatten(1, 2)
+        )
+
+        shape = (group_x.shape[-2], M, len(indices))
+        return (
+            cls_tokens,
+            flat_patches,
+            flat_positions,
+            flat_ids_remove,
+            expanded_params,
+            shape,
+        )
+
+    def forward(self, x: list[Tensor], params: list[Tensor]) -> dict:
+        device = x[0].device
+        V = len(x)
+        assert V <= self.num_views
+
+        # Group views by their resolution
         resolutions = [inp.shape[-1] for inp in x]
-        counts = [len(list(group)) for _, group in groupby(resolutions)]
-        end_idx = list(accumulate(counts))
-        start_idx = [0] + list(end_idx)[:-1]
-        N_vis = [self._get_N(res)[0] for res in resolutions]
-        base_offset = list(accumulate([N_vis[i] * c for i, c in enumerate(counts)]))
-        base_offset = [0] + list(accumulate(base_offset))[:-1]
+        groups = [
+            list(group) for _, group in groupby(range(V), key=lambda i: resolutions[i])
+        ]
 
-        # Initialize accumulators and offsets.
-        nV = len(counts)
-        all_cls, all_patches, all_positions = _list(nV), _list(nV), _list(nV)
-        all_ids_remove, all_group_params, shapes_list = _list(nV), _list(nV), _list(nV)
+        # Precompute per-view visible‐token counts and base offsets
+        N_vis_list = [self._get_N(res)[0] for res in resolutions]
+        view_base_offset = [0] + list(accumulate(N_vis_list[:-1]))
 
-        # Fuse group building and processing in one loop.
-        for ix, count in enumerate(counts):
-            indices = list(range(start_idx[ix], end_idx[ix]))
-            group_x = torch.stack([x[i] for i in indices], dim=1)  # [B, k, C, H, W]
-            group_params = torch.stack([params[i] for i in indices], dim=1)  # [B, k, 8]
-            enc = self.encode_views(group_x)
-            enc["z_enc"] += (
-                seg_embed_all[start_idx[ix] : end_idx[ix]].unsqueeze(0).unsqueeze(2)
+        # Apply segment embeddings
+        seg_embed = self.segment_embed[:V]
+        if self.segment_embed_mode == "permute":
+            seg_embed = seg_embed[torch.randperm(V, device=device)]
+
+        # Encode each group via our helper, then unpack
+        results = [
+            self._encode_group(
+                x, params, g, seg_embed, view_base_offset[g[0]], N_vis_list[g[0]]
             )
-            B = group_x.shape[0]
-            cls_tokens = enc["z_enc"][:, :, 0, :]
-            patch_tokens = enc["z_enc"][:, :, 1:, :]
-            flat_patches = patch_tokens.flatten(1, 2)
-            flat_positions = enc["patch_positions_vis"].flatten(1, 2)
-            M = enc["ids_remove_pos"].shape[2]
-            view_offsets = (
-                torch.arange(count, device=device) * N_vis[ix]
-            ).view(1, count, 1)
-            flat_ids_remove = (
-                enc["ids_remove_pos"] + view_offsets + base_offset[ix]
-            ).view(B, -1)
-            expanded_params = (
-                group_params[:, :, 4:8].unsqueeze(2).expand(-1, -1, M, -1).flatten(1, 2)
-            )
-            shapes_list[ix] = (group_x.shape[-2], M, count)
-            all_cls[ix] = cls_tokens
-            all_patches[ix] = flat_patches
-            all_positions[ix] = flat_positions
-            all_ids_remove[ix] = flat_ids_remove
-            all_group_params[ix] = expanded_params
-
-        joint_cls = torch.cat(all_cls, dim=1)
-        joint_patches = torch.cat(all_patches, dim=1)
-        joint_positions = torch.cat(all_positions, dim=1)
-        joint_ids_remove = torch.cat(all_ids_remove, dim=1)
-        joint_params = torch.cat(all_group_params, dim=1)
+            for g in groups
+        ]
+        # Unpack grouped results and concatenate tensors
+        *tensor_groups, shapes_list = zip(*results)
+        joint_cls, joint_patches, joint_positions, joint_ids_remove, joint_params = [
+            torch.cat(group, dim=1) for group in tensor_groups
+        ]
         joint_latents = torch.cat([joint_cls, joint_patches], dim=1)
 
+        # Decode, drop masked tokens, compute loss
         patch_pred = self.forward_decoder(joint_latents)["pose_pred"][
             :, joint_cls.shape[1] :, :
         ]
@@ -165,6 +163,7 @@ class PARTMaskedAutoEncoderViT(partmae_v5.PARTMaskedAutoEncoderViT):
         loss_dict = self._forward_loss(
             pose_pred_nopos, patch_pos_nopos, joint_params, shapes_list
         )
+
         return {
             "patch_positions_nopos": patch_pos_nopos,
             "shapes": shapes_list,
@@ -197,7 +196,9 @@ if __name__ == "__main__":
     from src.data.components.transforms.multi_crop_v3 import ParametrizedMultiCropV3
     from PIL import Image
     import torch.utils._pytree as pytree
+    from lightning import seed_everything
 
+    seed_everything(42)
     backbone = PART_mae_vit_base_patch16(pos_mask_ratio=0.75, mask_ratio=0.75).cuda()
     gV, lV = 2, 4
     V = gV + lV
@@ -205,22 +206,28 @@ if __name__ == "__main__":
     print(t.compute_max_scale_ratio_aug())  # <5.97
 
     class MockedDataset(torch.utils.data.Dataset):
-        def __init__(self, transform=None):
+        def __init__(self, transform=None, n=4):
             self.img = Image.open("artifacts/labrador.jpg")
             self.transform = transform
+            self.n = n
 
         def __getitem__(self, idx):
             return self.transform(self.img)
 
         def __len__(self):
-            return 4
+            return self.n
 
     dataset = MockedDataset(t)
-    loader = torch.utils.data.DataLoader(dataset, batch_size=4)
+    seed_everything(42)
+    loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
+    seed_everything(42)
     batch = next(iter(loader))
+    seed_everything(42)
     batch = pytree.tree_map_only(
         Tensor, lambda x: x.cuda(), batch
     )  # Move to GPU if available
-    
+
+    seed_everything(42)
     out = backbone(*batch)
     print("Output keys:", out.keys())
+    print("loss", out["loss"].detach().item())

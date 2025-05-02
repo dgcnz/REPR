@@ -534,14 +534,14 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         """
         _, gV, _, _, _ = g_x.shape
         _, lV, _, _, _ = l_x.shape
+        V = gV + lV
 
         # Encode views.
         g_enc = self.encode_views(g_x)
         l_enc = self.encode_views(l_x)
 
         if self.segment_embed_mode == "permute":
-            # Total number of segment embeddings is self.num_views
-            perm = torch.randperm(self.num_views)
+            perm = torch.randperm(V)
 
             # Randomly assign embeddings to global and local views based on their counts.
             g_perm = perm[:gV]
@@ -613,20 +613,40 @@ PART_mae_vit_base_patch16 = (
 )
 
 if __name__ == "__main__":
-    backbone = PART_mae_vit_base_patch16(pos_mask_ratio=0.75, mask_ratio=0.75)
-    # x = torch.randn(1, 3, 224, 224).repeat(2, 1, 1, 1)
-    # params = torch.tensor([[0, 0, 224, 224], [0, 0, 224, 224]])
-    # patch_size = 16
-    # num_patches = (224 // patch_size) ** 2
-    # out = backbone.forward(x, params)
-    # print("Output keys:", out.keys())
-    # print(out["loss"])
+    from src.data.components.transforms.multi_crop_v2 import ParametrizedMultiCropV2
+    from PIL import Image
+    import torch.utils._pytree as pytree
+    from lightning import seed_everything
 
-    # Test forward pass
-    B, gV, lV = 4, 2, 6
-    g_x = torch.randn(B, gV, 3, 224, 224)
-    g_params = torch.randn(B, gV, 8)
-    l_x = torch.randn(B, lV, 3, 96, 96)
-    l_params = torch.randn(B, lV, 8)
-    out = backbone(g_x, g_params, l_x, l_params)
+    seed_everything(42)
+    backbone = PART_mae_vit_base_patch16(pos_mask_ratio=0.75, mask_ratio=0.75).cuda()
+    gV, lV = 2, 4
+    V = gV + lV
+    t = ParametrizedMultiCropV2(n_global_crops=gV, n_local_crops=lV, distort_color=True)
+    print(t.compute_max_scale_ratio_aug())  # <5.97
+
+    class MockedDataset(torch.utils.data.Dataset):
+        def __init__(self, transform=None, n: int = 4):
+            self.img = Image.open("artifacts/labrador.jpg")
+            self.transform = transform
+            self.n = n
+
+        def __getitem__(self, idx):
+            return self.transform(self.img)
+
+        def __len__(self):
+            return self.n
+
+    dataset = MockedDataset(t)
+    seed_everything(42)
+    loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
+    seed_everything(42)
+    batch = next(iter(loader))
+    batch = pytree.tree_map_only(
+        Tensor, lambda x: x.cuda(), batch
+    )  # Move to GPU if available
+
+    seed_everything(42)
+    out = backbone(*batch)
     print("Output keys:", out.keys())
+    print("loss", out["loss"].detach().item())
