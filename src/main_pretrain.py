@@ -67,7 +67,9 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
     )
 
     for logger in fabric._loggers:
-        logger.log_hyperparams(cfg)
+        logger.log_hyperparams(
+            OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+        )
 
     fabric.launch()
 
@@ -89,10 +91,10 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
 
     if cfg.get("compile", False):
         for key, val in cfg.get("compile_expr", {}).items():
-            module_path, _, attr_name = key.rpartition('.')
+            module_path, _, attr_name = key.rpartition(".")
             print(f"Setting {key} to {val}")
             setattr(__import__(module_path, fromlist=[attr_name]), attr_name, val)
-            
+
         compile_kwargs = {"fullgraph": True}
         compile_kwargs.update(cfg.get("compile_kwargs", {}))
         if compile_fn := cfg.get("compile_fn", ""):
@@ -103,7 +105,6 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
         else:
             # compile full model
             model = torch.compile(model, **compile_kwargs)
-        
 
     # Initialize optimizer
     log.info(f"Instantiating optimizer <{cfg.optimizer._target_}>")
