@@ -1,0 +1,22 @@
+# @package _global_
+defaults:
+  - pretrain/clevrtexv2_outd/partmae_v6/vit_s_16/_base
+
+compile: False
+
+trainer:
+  max_epochs: 200
+  accelerator: gpu
+  # limit_train_batches: 128
+  accumulate_grad_batches: 1
+
+scheduler:
+  warmup_t: 780 # 10 * 78
+  t_initial: 15600 # 200 * 78
+
+train_dataloader:
+  batch_size: 128
+  num_workers: 8
+
+data:
+  root: "/home/dgcnz/development/datasets/clevrtex/clevrtexv2_outd"

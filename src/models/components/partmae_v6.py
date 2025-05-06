@@ -1,3 +1,4 @@
+from itertools import groupby, accumulate
 import torch
 import math
 from torch import nn, Tensor
@@ -18,6 +19,123 @@ from src.models.components.utils.offgrid_pos_embed import (
 from torch.nn.modules.utils import _pair
 from jaxtyping import Int, Float
 from typing import Literal
+from src.models.components.heads.dino_head import DINOHead
+from src.models.components.loss.simdino import MCRLoss
+
+
+class PoseLoss(nn.Module):
+    def __init__(
+        self,
+        criterion: str = "mse",
+        alpha_t: float = 0.5,
+        alpha_s: float = 0.75,
+        alpha_ts: float = 0.5,
+    ):
+        super().__init__()
+        self.criterion = mse_loss if criterion == "mse" else l1_loss
+        self.alpha_t = alpha_t
+        self.alpha_s = alpha_s
+        self.alpha_ts = alpha_ts
+
+    def forward(self, pred_dT: Tensor, gt_dT: Tensor, mask: Tensor) -> Tensor:
+        loss_full = self.criterion(pred_dT, gt_dT, reduction="none")
+
+        diag, offdiag = mask.sum(), (1 - mask).sum()
+
+        loss_intra_t = (loss_full[..., :2] * mask).sum() / diag
+        loss_inter_t = (loss_full[..., :2] * (1 - mask)).sum() / offdiag
+        loss_intra_s = (loss_full[..., 2:] * mask).sum() / diag
+        loss_inter_s = (loss_full[..., 2:] * (1 - mask)).sum() / offdiag
+        loss_t = self.alpha_t * loss_inter_t + (1 - self.alpha_t) * loss_intra_t
+        loss_s = self.alpha_s * loss_inter_s + (1 - self.alpha_s) * loss_intra_s
+        loss = self.alpha_ts * loss_t + (1 - self.alpha_ts) * loss_s
+        return {
+            "loss_pose_intra_t": loss_intra_t,
+            "loss_pose_inter_t": loss_inter_t,
+            "loss_pose_intra_s": loss_intra_s,
+            "loss_pose_inter_s": loss_inter_s,
+            "loss_pose_t": loss_t,
+            "loss_pose_s": loss_s,
+            "loss_pose": loss,
+        }
+
+
+class PatchLoss(nn.Module):
+    def __init__(self, sigma: tuple[float, float, float, float] = (0.1, 0.1, 0.1, 0.1)):
+        super().__init__()
+        self.register_buffer("sigma", torch.tensor(sigma, dtype=torch.float32))
+
+    def forward(self, z: torch.Tensor, gt_dT: torch.Tensor) -> torch.Tensor:
+        _, T, _ = z.shape
+
+        # 1) compute weights w_ij
+        kernel = (gt_dT.pow(2) / (2 * self.sigma.pow(2))).sum(dim=-1)  # [B,T,T]
+        w = torch.exp(-kernel)
+
+        # 2) precompute ‖z_i‖²
+        z2 = (z * z).sum(dim=-1)  # [B,T]
+
+        # 3) term1 = Σ_i ‖z_i‖² (Σ_j w_ij)
+        w_col_sum = w.sum(dim=2)  # [B,T] (sum over j for fixed i)
+        term1 = (z2 * w_col_sum).sum(dim=1)  # [B]
+
+        # 4) term2 = Σ_i z_iᵀ (Σ_j w_ij z_j)
+        wz = torch.bmm(w, z)  # [B,T,D]
+        term2 = (wz * z).sum(dim=(1, 2))  # [B]
+
+        # 5) term3 = Σ_j ‖z_j‖² (Σ_i w_ij)
+        w_row_sum = w.sum(dim=1)  # [B,T] (sum over i for fixed j)
+        term3 = (z2 * w_row_sum).sum(dim=1)  # [B]
+
+        # 6) combine & normalize
+        # Loss per batch item = term1 - 2*term2 + term3
+        # mean over patch pairs (i,j) and batch
+        loss = (term1 - 2 * term2 + term3).mean() / (T * T)
+        return loss
+
+
+class CosineAlignmentLoss(nn.Module):
+    def __init__(self, eps: float = 1e-8):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, pred_dT: Tensor, gt_dT: Tensor) -> Tensor:
+        # pred_dT, gt_dT: [B, T, T, C]
+        B, _, _, C = pred_dT.shape
+        # flatten the pair dims → [B, P, C], where P=T*T
+        pred = pred_dT.view(B, -1, C)
+        gt = gt_dT.view(B, -1, C)
+        # normalize each vector to unit length
+        pred_norm = pred / (pred.norm(dim=-1, keepdim=True) + self.eps)
+        gt_norm = gt / (gt.norm(dim=-1, keepdim=True) + self.eps)
+        # cosine similarity per pair
+        cos_sim = (pred_norm * gt_norm).sum(dim=-1)  # [B, P]
+        # loss = 1 − cos_sim, then mean over all pairs and batch
+        # this is the same as -cos_sim but easier to interpret
+        return (1 - cos_sim).mean()
+
+
+class PoseHead(nn.Module):
+    def __init__(self, embed_dim: int, num_targets: int, apply_tanh: bool = False):
+        super().__init__()
+        self.linear = nn.Linear(embed_dim, num_targets, bias=False)
+        self.tanh = nn.Tanh() if apply_tanh else nn.Identity()
+
+    def forward(self, z, ids_remove):
+        patch_pred = self.linear(z)
+        pose_pred_nopos = _drop_pos(patch_pred, ids_remove)
+        pose_u = pose_pred_nopos.unsqueeze(2)
+        pose_v = pose_pred_nopos.unsqueeze(1)
+        pred_dT = self.tanh(pose_u - pose_v)
+        return pred_dT
+
+
+def _drop_pos(
+    x: Float[Tensor, "B N K"], ids_remove: Int[Tensor, "B M"]
+) -> Float[Tensor, "B M K"]:
+    idx = ids_remove.unsqueeze(-1).expand(-1, -1, x.shape[-1])
+    return torch.gather(x, dim=1, index=idx)
+
 
 SAMPLERS = {
     "random": random_sampling,
@@ -28,10 +146,6 @@ SAMPLERS = {
 
 
 class PARTMaskedAutoEncoderViT(nn.Module):
-    r"""
-    Self-supervised training by generalized patch-level transforms between augmented views of an image.
-    """
-
     def __init__(
         self,
         img_size: int = 224,
@@ -50,17 +164,29 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         decoder_depth: int = 8,
         decoder_num_heads: int = 16,
         sampler: str = "random",
+        verbose: bool = False,
+        num_views: int = 6,  # default is 1 global 5 local
+        segment_embed_mode: Literal["permute", "none", "fixed"] = "none",
+        freeze_encoder: bool = False,
+        apply_tanh: bool = True,
+        # losses
+        lambda_cos: float = 0.1,
+        lambda_pose: float = 0.6,
+        lambda_patch: float = 0.3,
+        lambda_dino: float = 0.0,
+        # pose loss
         criterion: str = "l1",
         alpha_t: float = 0.5,
         alpha_ts: float = 0.5,
         alpha_s: float = 0.75,
-        verbose: bool = False,
-        num_views: int = 6,  # default is 1 global 5 local
-        # TODO: remove after 200ep training of old model
-        segment_embed_mode: Literal["permute", "none", "fixed"] = "none",
-        freeze_encoder: bool = False,
-        apply_tanh: bool = True,
+        # patch loss
+        sigma: tuple[float, float, float, float] = (0.1, 0.1, 0.1, 0.1),
+        # cosine alignment loss
+        cos_eps: float = 1e-8,
     ):
+        """
+        :param segment_embed_mode: 'permute' (random order), 'fixed' (same order), 'none'
+        """
         super().__init__()
         self.embed_dim = embed_dim
         self.img_size = img_size
@@ -69,9 +195,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.mask_ratio = mask_ratio
         self.pos_mask_ratio = pos_mask_ratio
         self.max_scale_ratio = max_scale_ratio
-        self.alpha_ts = alpha_ts
-        self.alpha_t = alpha_t
-        self.alpha_s = alpha_s
 
         self.patch_embed = OffGridPatchEmbed(
             patch_size=patch_size,
@@ -80,9 +203,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             mask_ratio=mask_ratio,
             sampler=SAMPLERS[sampler],
         )
-        criterions = {"l1": l1_loss, "mse": mse_loss}
-        self.criterion = criterions[criterion]
-
+        
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         num_patches = (img_size // patch_size) ** 2
         self.pos_embed = nn.Parameter(
@@ -121,10 +242,44 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         )
         self.num_targets = 4
         self.decoder_norm = norm_layer(decoder_embed_dim)
-        self.decoder_pred = nn.Linear(decoder_embed_dim, self.num_targets, bias=False)
-        self.apply_tanh = apply_tanh
-        self.tanh = nn.Tanh() if self.apply_tanh else nn.Identity()
+        self.pose_head = PoseHead(
+            embed_dim=decoder_embed_dim,
+            num_targets=self.num_targets,
+            apply_tanh=apply_tanh,
+        )
+        self.dino_head = None
+        if lambda_dino > 0:
+            self.dino_head = DINOHead(
+                in_dim=embed_dim,
+                use_bn=False,
+                nlayers=3,
+                hidden_dim=2048,
+                bottleneck_dim=256,
+            )
+        # default
+        self.dino_loss = MCRLoss(
+            ncrops=num_views,
+            reduce_cov=0, 
+            expa_type=0,
+            # eps: 0.05 is the one used for vit_b originally, but with batch size <= 128 it goes to NAN
+            eps=0.5, 
+            coeff=1.0,
+        )
         self.verbose = verbose
+
+        # losses
+        self._pose_loss = PoseLoss(
+            criterion=criterion,
+            alpha_t=alpha_t,
+            alpha_s=alpha_s,
+            alpha_ts=alpha_ts,
+        )
+        self._patch_loss = PatchLoss(sigma=sigma)
+        self._cosine_loss = CosineAlignmentLoss(eps=cos_eps)
+        self.lambda_pose = lambda_pose
+        self.lambda_patch = lambda_patch
+        self.lambda_cos = lambda_cos
+        self.lambda_dino = lambda_dino
 
         # Instead of using nn.Embedding, use a raw parameter for view-specific segment embeddings.
         self.num_views = num_views
@@ -188,7 +343,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         nn.init.normal_(self.cls_token, std=0.02)
         nn.init.normal_(self.mask_pos_token, std=0.02)
         self.apply(self._init_weights)
-        nn.init.kaiming_uniform_(self.decoder_pred.weight, a=4)
+        nn.init.kaiming_uniform_(self.pose_head.linear.weight, a=4)
 
     def _init_weights(self, m):
         r"""
@@ -283,17 +438,10 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         )
         return joint_latents, joint_patch_pos, joint_ids_remove
 
-    def forward_encoder(self, x: Tensor) -> dict:
-        r"""
-        Encode an image crop.
-
-        :param x: Tensor of shape [B*n_views, C, H, W]
-        :return: Dict with:
-                 "z_enc": Tensor of shape [B*n_views, 1+N_vis, D] (1 class token + N_vis visible tokens),
-                 "patch_positions_vis": Tensor of shape [B*n_views, N_vis, 2],
-                 "ids_remove_pos": Tensor of shape [B*n_views, M] (M indices of masked tokens)
-        """
+    def prepare_tokens(self, x: Tensor):
+        # 1. (Off-grid) Patch (sub-)sampling and embedding
         x, patch_positions_vis = self.patch_embed(x)
+        # 2. Mask Position Embeddings
         B_total, N_vis, D = x.shape
         ids_keep, _, ids_restore, ids_remove = self.random_masking(
             x, self.pos_mask_ratio
@@ -303,6 +451,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         patch_positions_pos = torch.gather(
             patch_positions_vis, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, 2)
         )
+        # 3. Apply Position Embeddings
         pos_embed = get_2d_sincos_pos_embed(
             patch_positions_pos.flatten(0, 1) / self.patch_size, self.embed_dim
         )
@@ -313,9 +462,23 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             pos_embed, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, D)
         )
         x = x + pos_embed
+        # 4. Class Token
         cls_token = self.cls_token + self.pos_embed[:, :1, :]
         cls_tokens = cls_token.expand(x.shape[0], -1, -1)
         x = torch.cat((cls_tokens, x), dim=1)
+        return x, patch_positions_vis, ids_remove
+
+    def forward_encoder(self, x: Tensor) -> dict:
+        r"""
+        Encode an image crop.
+
+        :param x: Tensor of shape [B*n_views, C, H, W]
+        :return: Dict with:
+                 "z_enc": Tensor of shape [B*n_views, 1+N_vis, D] (1 class token + N_vis visible tokens),
+                 "patch_positions_vis": Tensor of shape [B*n_views, N_vis, 2],
+                 "ids_remove_pos": Tensor of shape [B*n_views, M] (M indices of masked tokens)
+        """
+        x, patch_positions_vis, ids_remove = self.prepare_tokens(x)
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
@@ -336,29 +499,9 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         for blk in self.decoder_blocks:
             x = blk(x)
         x = self.decoder_norm(x)
-        x = self.decoder_pred(x)
-        return {"pose_pred": x}
-
-    def _drop_pos(
-        self, patch_pred: Tensor, patch_pos: Tensor, joint_ids_remove: Tensor
-    ) -> tuple[Tensor, Tensor]:
-        r"""
-        Drop tokens from the joint patch predictions and patch positions.
-
-        :param patch_pred: Tensor of shape [B, P, num_targets]
-        :param patch_pos: Tensor of shape [B, P, 2]
-        :param joint_ids_remove: Tensor of shape [B, M] (indices into patch tokens)
-        :return: Tuple (pred_nopos, pos_nopos) with shapes [B, M, num_targets] and [B, M, 2]
-        """
-        pred_nopos = torch.gather(
-            patch_pred,
-            dim=1,
-            index=joint_ids_remove.unsqueeze(-1).expand(-1, -1, self.num_targets),
-        )
-        pos_nopos = torch.gather(
-            patch_pos, dim=1, index=joint_ids_remove.unsqueeze(-1).expand(-1, -1, 2)
-        )
-        return pred_nopos, pos_nopos
+        return x
+        # return self.decoder_pred(x)
+        # return {"pose_pred": x}
 
     def random_masking(self, x: Tensor, mask_ratio: float):
         r"""
@@ -382,23 +525,30 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         mask = torch.ones([B, N], device=x.device)
         mask[:, :len_keep] = 0
         mask = torch.gather(mask, dim=1, index=ids_restore).bool()
-
         return ids_keep, mask, ids_restore, ids_remove
 
+    @torch.no_grad
     def _compute_gt(
         self,
         patch_pos_nopos: Int[Tensor, "B T 2"],
         params: Int[Tensor, "B T 4"],
-        crop_sizes: Float[Tensor, "B T 1"],
+        shapes: list,
     ) -> Tensor:
         r"""
         Compute ground-truth pairwise differences using per-token crop sizes.
 
         :param patch_pos_nopos: Tensor of shape [B, T, 2]
         :param params: Tensor of shape [B, T, 4]
-        :param crop_sizes: Tensor of shape [B, T, 1]
+        :param shapes: list of tuples (crop_size, M, V)
         :return: Tensor of shape [B, T, T, 4] (pairwise differences)
         """
+        device = patch_pos_nopos.device
+        B = patch_pos_nopos.shape[0]
+
+        crop_sizes = torch.cat(
+            [torch.full((M * V, 1), cs, device=device) for cs, M, V in shapes]
+        )[None].expand(B, -1, -1)
+
         canonical_size = self.canonical_img_size
 
         # Extract crop parameters: [x,y] offsets and [width,height]
@@ -429,167 +579,150 @@ class PARTMaskedAutoEncoderViT(nn.Module):
 
         return gt_dT
 
-    def _compute_pred(self, pose_pred_nopos: Tensor) -> Tensor:
-        r"""
-        Compute pairwise differences of predicted transforms.
+    def _create_mask(self, shapes, device):
+        # !! torch.compile-compliant:
+        #   - Build labels list in Python to avoid data-dependent tensor creation.
+        # resgroup_idx  is the resolution group index
+        # in_resgroup_idx is the index of the view within that group
+        resgroup_idx, in_resgroup_idx = torch.tensor(
+            [
+                (i, j)
+                for i, (_, M, V) in enumerate(shapes)
+                for j in range(V)  # each view in that group
+                for _ in range(M)  # one entry per patch
+            ],
+            device=device,
+        ).unbind(1)
 
-        :param pose_pred_nopos: Tensor of shape [B, T, 4]
-        :return: Tensor of shape [B, T, T, 4] (pairwise differences)
-        """
-        pose_u = pose_pred_nopos.unsqueeze(2)
-        pose_v = pose_pred_nopos.unsqueeze(1)
-        return self.tanh(pose_u - pose_v)
+        # Build intra- and inter-view masks
+        # mask tells use which patches belong to the same view
+        mask = resgroup_idx[:, None] == resgroup_idx[None, :]
+        mask = mask & (in_resgroup_idx[:, None] == in_resgroup_idx[None, :])
+        mask = mask.float()[None, ..., None]
+        return mask
 
-    def _forward_loss(
-        self,
-        pose_pred_nopos: Tensor,
-        patch_pos_nopos: Tensor,
-        params: Tensor,
-        shapes: tuple,
-    ) -> dict:
-        r"""
-        Compute intra-crop and inter-crop losses.
+    def _get_N(self, crop_size: int) -> tuple[int, int]:
+        N = (crop_size // self.patch_size) ** 2
+        N_vis = int(N * (1 - self.mask_ratio))
+        N_pos = int(N_vis * (1 - self.pos_mask_ratio))
+        return N_vis, N_vis - N_pos
 
-        :param pose_pred_nopos: Tensor of shape [B, T, 4]
-        :param patch_pos_nopos: Tensor of shape [B, T, 2]
-        :param params: Tensor of shape [B, T, 4]
-        :param shapes: Tuple ((global_size, M_g, gV), (local_size, M_l, lV))
-        :return: Dict with loss components and prediction information.
-        """
-        B, T, _ = pose_pred_nopos.shape
-        device = pose_pred_nopos.device
-        global_size, M_g, gV = shapes[0]
-        local_size, M_l, lV = shapes[1]
+    def _encode_resgroup(self, x, params, indices, seg_embed, base_offset, N_vis):
+        device = x[0].device
+        group_x = torch.stack([x[i] for i in indices], dim=1)
+        group_params = torch.stack([params[i] for i in indices], dim=1)
+        enc = self.encode_views(group_x)
+        enc["z_enc"] = enc["z_enc"] + seg_embed[indices].unsqueeze(0).unsqueeze(2)
 
-        global_crop_sizes = torch.full((gV * M_g, 1), global_size, device=device)
-        local_crop_sizes = torch.full((lV * M_l, 1), local_size, device=device)
-        token_crop_sizes = (
-            torch.cat([global_crop_sizes, local_crop_sizes], dim=0)
-            .unsqueeze(0)
-            .expand(B, -1, -1)
+        B = group_x.shape[0]
+        cls_tokens = enc["z_enc"][:, :, 0, :]
+        flat_patches = enc["z_enc"][:, :, 1:, :].flatten(1, 2)
+        flat_positions = enc["patch_positions_vis"].flatten(1, 2)
+
+        M = enc["ids_remove_pos"].shape[2]
+        view_offsets = (torch.arange(len(indices), device=device) * N_vis).view(
+            1, len(indices), 1
+        )
+        flat_ids_remove = (enc["ids_remove_pos"] + view_offsets + base_offset).view(
+            B, -1
         )
 
-        pred_dT = self._compute_pred(pose_pred_nopos)
-        gt_dT = self._compute_gt(patch_pos_nopos, params, token_crop_sizes)
-        loss_full = self.criterion(pred_dT, gt_dT, reduction="none")
-
-        global_labels = torch.arange(gV, device=device).repeat_interleave(M_g)
-        local_labels = torch.arange(gV, gV + lV, device=device).repeat_interleave(M_l)
-        labels = torch.cat([global_labels, local_labels], dim=0)
-        intra_mask = (
-            (labels.unsqueeze(0) == labels.unsqueeze(1))
-            .float()
-            .unsqueeze(0)
-            .unsqueeze(-1)
-            .expand(B, -1, -1, 1)
+        expanded_params = (
+            group_params[:, :, 4:8].unsqueeze(2).expand(-1, -1, M, -1).flatten(1, 2)
         )
-        inter_mask = 1 - intra_mask
 
-        loss_t_full = loss_full[..., :2]
-        loss_s_full = loss_full[..., 2:]
-        diag_denom = intra_mask.sum()
-        offdiag_denom = inter_mask.sum()
-        loss_intra_t = (loss_t_full * intra_mask).sum() / diag_denom
-        loss_inter_t = (loss_t_full * inter_mask).sum() / offdiag_denom
-        loss_intra_s = (loss_s_full * intra_mask).sum() / diag_denom
-        loss_inter_s = (loss_s_full * inter_mask).sum() / offdiag_denom
-        loss_t = loss_inter_t * self.alpha_t + loss_intra_t * (1 - self.alpha_t)
-        loss_s = loss_inter_s * self.alpha_s + loss_intra_s * (1 - self.alpha_s)
-        loss = self.alpha_ts * loss_t + (1 - self.alpha_ts) * loss_s
+        shape = (group_x.shape[-2], M, len(indices))
+        return (
+            cls_tokens,
+            flat_patches,
+            flat_positions,
+            flat_ids_remove,
+            expanded_params,
+            shape,
+        )
+
+    def forward(self, x: list[Tensor], params: list[Tensor]) -> dict:
+        device = x[0].device
+        B, V = x[0].shape[0], len(x)
+        assert V == self.num_views
+
+        # Group views by their resolution
+        resolutions = [inp.shape[-1] for inp in x]
+        groups = [
+            list(group) for _, group in groupby(range(V), key=lambda i: resolutions[i])
+        ]
+
+        # Precompute per-view visible‐token counts and base offsets
+        N_vis_list = [self._get_N(res)[0] for res in resolutions]
+        view_base_offset = [0] + list(accumulate(N_vis_list[:-1]))
+
+        # Apply segment embeddings
+        seg_embed = self.segment_embed[:V]
+        if self.segment_embed_mode == "permute":
+            seg_embed = seg_embed[torch.randperm(V, device=device)]
+
+        # Encode each group via our helper, then unpack
+        results = [
+            self._encode_resgroup(
+                x, params, g, seg_embed, view_base_offset[g[0]], N_vis_list[g[0]]
+            )
+            for g in groups
+        ]
+        # Unpack grouped results and concatenate tensors
+        *tensor_groups, shapes_list = zip(*results)
+        joint_cls, joint_patches, joint_positions, joint_ids_remove, joint_params = [
+            torch.cat(group, dim=1) for group in tensor_groups
+        ]
+        z = torch.cat([joint_cls, joint_patches], dim=1)
+
+        # Decode, drop masked tokens
+        z = self.forward_decoder(z)
+
+        # pose head (without the cls tokens)
+        pred_dT = self.pose_head(z[:, V:, :], joint_ids_remove)
+
+        if self.lambda_dino:
+            # joint_cls: [B, V, D]
+            # DINO Loss assumes [V, B, D] instead of [B, V, D]
+            student_z = self.dino_head(joint_cls.permute(1, 0, 2))
+            teacher_z = student_z[: len(groups[0])].detach()  # Just the global views
+            L_dino, L_dino_comp, L_dino_expa = self.dino_loss(student_z, teacher_z)
+        else:
+            L_dino = L_dino_comp = L_dino_expa = 0.0
+
+        # compute loss
+        patch_pos_nopos = _drop_pos(joint_positions, joint_ids_remove)
+        gt_dT = self._compute_gt(patch_pos_nopos, joint_params, shapes_list)
+        mask = self._create_mask(shapes_list, device).expand(B, -1, -1, 1)
+        L_pose = self._pose_loss(pred_dT, gt_dT, mask)
+        # ----------------
+
+        # Applying L_patch only on posmasked tokens
+        patches_nopos = _drop_pos(joint_patches, joint_ids_remove)
+        L_patch = (
+            self._patch_loss(patches_nopos, gt_dT) if self.lambda_patch > 0 else 0.0
+        )
+        L_cos = self._cosine_loss(pred_dT, gt_dT) if self.lambda_cos > 0 else 0.0
+
+        loss = self.lambda_pose * L_pose["loss_pose"]
+        loss = loss + self.lambda_patch * L_patch
+        loss = loss + self.lambda_cos * L_cos
+        loss = loss + self.lambda_dino * L_dino
 
         return {
-            "loss_intra_t": loss_intra_t,
-            "loss_inter_t": loss_inter_t,
-            "loss_intra_s": loss_intra_s,
-            "loss_inter_s": loss_inter_s,
-            "loss_t": loss_t,
-            "loss_s": loss_s,
-            "loss": loss,
+            "patch_positions_nopos": patch_pos_nopos,
+            "shapes": shapes_list,
             "pred_dT": pred_dT,
             "gt_dT": gt_dT,
+            "loss": loss,
+            "loss_pose": L_pose["loss_pose"],
+            "loss_patch": L_patch,
+            "loss_cos": L_cos,
+            "loss_dino": L_dino,
+            "loss_dino_comp": L_dino_comp,
+            "loss_dino_expa": L_dino_expa,
+            **L_pose,
         }
-
-    def forward(
-        self,
-        g_x: Float[Tensor, "B gV C gH gW"],
-        g_params: Float[Tensor, "B gV 8"],
-        l_x: Float[Tensor, "B lV C lH lW"],
-        l_params: Float[Tensor, "B lV 8"],
-    ) -> dict:
-        r"""
-        Forward pass:
-          - Encode global and local views.
-          - Add view-specific segment embeddings.
-          - Split class and patch tokens per view.
-          - Prepare joint inputs (latent sequence, patch positions, drop indices) in one step.
-          - Decode jointly; discard the class tokens.
-          - Drop tokens from the joint patch predictions and patch positions.
-          - Expand augmentation parameters (using crop params from indices 4:8) and compute loss.
-
-        :param g_x: Global views [B, gV, C, gH, gW]
-        :param g_params: Global augmentation parameters [B, gV, 8] (crop parameters are columns 4:8)
-        :param l_x: Local views [B, lV, C, lH, lW]
-        :param l_params: Local augmentation parameters [B, lV, 8] (crop parameters are columns 4:8)
-        :return: Dict with loss components and auxiliary outputs.
-        """
-        _, gV, _, _, _ = g_x.shape
-        _, lV, _, _, _ = l_x.shape
-        V = gV + lV
-
-        # Encode views.
-        g_enc = self.encode_views(g_x)
-        l_enc = self.encode_views(l_x)
-
-        # TODO: refactor this, it is a bit messy
-        if self.segment_embed_mode == "permute":
-            perm = torch.randperm(V)
-
-            # Randomly assign embeddings to global and local views based on their counts.
-            g_perm = perm[:gV]
-            l_perm = perm[gV : gV + lV]
-
-            g_segment = self.segment_embed[g_perm]
-            l_segment = self.segment_embed[l_perm]
-        else:
-            g_segment = self.segment_embed[:gV]
-            l_segment = self.segment_embed[gV : gV + lV]
-
-        # Add view-specific segment embeddings.
-        g_enc["z_enc"] = g_enc["z_enc"] + g_segment.unsqueeze(0).unsqueeze(2)
-        l_enc["z_enc"] = l_enc["z_enc"] + l_segment.unsqueeze(0).unsqueeze(2)
-
-        # Prepare joint inputs.
-        joint_latents, joint_patch_pos, joint_ids_remove = self.prepare_joint_inputs(
-            g_enc, l_enc
-        )
-
-        # Decode jointly.
-        dec_out = self.forward_decoder(joint_latents)  # [B, L, num_targets]
-        total_cls = gV + lV
-        patch_pred = dec_out["pose_pred"][:, total_cls:, :]
-
-        # Drop tokens from the joint patch predictions.
-        pose_pred_nopos, patch_pos_nopos = self._drop_pos(
-            patch_pred, joint_patch_pos, joint_ids_remove
-        )
-
-        # Use crop parameters from columns 4:8.
-        g_params_crop = g_params[:, :, 4:8]
-        l_params_crop = l_params[:, :, 4:8]
-
-        M_g = g_enc["ids_remove_pos"].shape[2]
-        M_l = l_enc["ids_remove_pos"].shape[2]
-        g_params_exp = g_params_crop.unsqueeze(2).expand(-1, -1, M_g, -1).flatten(1, 2)
-        l_params_exp = l_params_crop.unsqueeze(2).expand(-1, -1, M_l, -1).flatten(1, 2)
-        params_all = torch.cat([g_params_exp, l_params_exp], dim=1)
-
-        shapes = ((g_x.shape[-2], M_g, gV), (l_x.shape[-2], M_l, lV))
-        loss_dict = self._forward_loss(
-            pose_pred_nopos, patch_pos_nopos, params_all, shapes
-        )
-        out = {"patch_positions_nopos": patch_pos_nopos, "shapes": shapes}
-        out.update(loss_dict)
-        return out
 
 
 def PART_mae_vit_base_patch16_dec512d8b(**kwargs):
@@ -614,20 +747,27 @@ PART_mae_vit_base_patch16 = (
 )
 
 if __name__ == "__main__":
-    from src.data.components.transforms.multi_crop_v2 import ParametrizedMultiCropV2
+    from src.data.components.transforms.multi_crop_v3 import ParametrizedMultiCropV3
     from PIL import Image
     import torch.utils._pytree as pytree
     from lightning import seed_everything
 
     seed_everything(42)
-    backbone = PART_mae_vit_base_patch16(pos_mask_ratio=0.75, mask_ratio=0.75).cuda()
-    gV, lV = 2, 4
+    gV, lV = 2, 3
     V = gV + lV
-    t = ParametrizedMultiCropV2(n_global_crops=gV, n_local_crops=lV, distort_color=True)
+
+    backbone = (
+        PART_mae_vit_base_patch16(
+            pos_mask_ratio=0.9, mask_ratio=0.9, lambda_dino=0.1, num_views=V
+        )
+        .cuda()
+        .eval()
+    )
+    t = ParametrizedMultiCropV3(n_global_crops=gV, n_local_crops=lV, distort_color=True)
     print(t.compute_max_scale_ratio_aug())  # <5.97
 
     class MockedDataset(torch.utils.data.Dataset):
-        def __init__(self, transform=None, n: int = 4):
+        def __init__(self, transform=None, n=4):
             self.img = Image.open("artifacts/labrador.jpg")
             self.transform = transform
             self.n = n
@@ -638,16 +778,17 @@ if __name__ == "__main__":
         def __len__(self):
             return self.n
 
-    dataset = MockedDataset(t)
-    seed_everything(42)
-    loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
-    seed_everything(42)
-    batch = next(iter(loader))
-    batch = pytree.tree_map_only(
-        Tensor, lambda x: x.cuda(), batch
-    )  # Move to GPU if available
+    with torch.no_grad():
+        dataset = MockedDataset(t)
+        seed_everything(42)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
+        seed_everything(42)
+        batch = next(iter(loader))
+        seed_everything(42)
+        batch = pytree.tree_map_only(
+            Tensor, lambda x: x.cuda(), batch
+        )  # Move to GPU if available
 
-    seed_everything(42)
-    out = backbone(*batch)
-    print("Output keys:", out.keys())
-    print("loss", out["loss"].detach().item())
+        seed_everything(42)
+        out = backbone(*batch)
+        print("Output keys:", out.keys())

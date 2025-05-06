@@ -73,3 +73,8 @@ dev = [
 [tool.ruff.lint]
 ignore = ["F722"]
 
+# pyproject.toml
+[tool.pytest.ini_options]
+testpaths = [
+    "tests",
+]

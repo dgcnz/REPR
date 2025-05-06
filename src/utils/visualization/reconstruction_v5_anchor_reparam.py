@@ -1,12 +1,12 @@
 import torch
 import math
-import torch.nn.functional as F
 from src.utils.visualization.lstsq_solver import lstsq_dT_solver
 from src.utils.visualization.general import paste_patch
-from jaxtyping import Float, Int
+from jaxtyping import Float
 from torch import Tensor
 
 
+@torch.no_grad
 def reconstruction_lstsq_with_anchor_reparam(
     x: list[Float[Tensor, "C gH gW"] | Float[Tensor, "C lH lW"]],
     patch_positions_nopos: Float[Tensor, "M 2"],

@@ -108,7 +108,7 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
 
     # Initialize optimizer
     log.info(f"Instantiating optimizer <{cfg.optimizer._target_}>")
-    optimizer = hydra.utils.instantiate(cfg.optimizer, params=model.parameters())()
+    optimizer = hydra.utils.instantiate(cfg.optimizer, model.parameters())()
 
     # Initialize scheduler
     scheduler = None

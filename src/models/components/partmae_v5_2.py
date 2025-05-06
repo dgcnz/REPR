@@ -5,8 +5,6 @@ from src.models.components import partmae_v5
 from itertools import groupby, accumulate
 
 
-def _list(n: int):
-    return [None] * n
 
 
 class PARTMaskedAutoEncoderViT(partmae_v5.PARTMaskedAutoEncoderViT):
@@ -85,7 +83,7 @@ class PARTMaskedAutoEncoderViT(partmae_v5.PARTMaskedAutoEncoderViT):
         N_pos = int(N_vis * (1 - self.pos_mask_ratio))
         return N_vis, N_vis - N_pos
 
-    def _encode_group(self, x, params, indices, seg_embed, base_offset, N_vis):
+    def _encode_resgroup(self, x, params, indices, seg_embed, base_offset, N_vis):
         device = x[0].device
         group_x = torch.stack([x[i] for i in indices], dim=1)
         group_params = torch.stack([params[i] for i in indices], dim=1)
@@ -141,7 +139,7 @@ class PARTMaskedAutoEncoderViT(partmae_v5.PARTMaskedAutoEncoderViT):
 
         # Encode each group via our helper, then unpack
         results = [
-            self._encode_group(
+            self._encode_resgroup(
                 x, params, g, seg_embed, view_base_offset[g[0]], N_vis_list[g[0]]
             )
             for g in groups

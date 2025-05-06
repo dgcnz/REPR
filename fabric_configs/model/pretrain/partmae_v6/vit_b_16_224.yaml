@@ -1,0 +1,50 @@
+_target_: src.models.components.partmae_v6.PARTMaskedAutoEncoderViT
+
+img_size: 224
+canonical_img_size: 512
+max_scale_ratio: 6.0 # a bit more than the real value
+
+patch_size: 16
+in_chans: 3
+embed_dim: 768
+depth: 12
+num_heads: 12
+mlp_ratio: 4
+norm_layer:
+  _target_: torch.nn.LayerNorm
+  eps: 1e-6
+  _partial_: true
+mask_ratio: 0.75
+pos_mask_ratio: 0.75
+num_views: ???
+
+decoder_embed_dim: 512
+decoder_depth: 8
+decoder_num_heads: 16
+
+apply_tanh: false
+segment_embed_mode: none
+
+# losses
+
+lambda_cos:  0.1
+lambda_pose:  0.6
+lambda_patch:  0.3
+
+# pose loss
+sampler: stratified_jittered
+criterion: l1
+
+alpha_t: 0.5
+alpha_ts: 0.8
+alpha_s: 1.0
+
+# patch loss
+sigma:
+  - 0.1
+  - 0.1
+  - 0.1
+  - 0.1
+
+# cosine loss
+cos_eps: 1e-8

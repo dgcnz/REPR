@@ -1,5 +1,12 @@
-_target_: torch.optim.AdamW
+_target_: timm.optim.create_optimizer_v2
 _partial_: true
-lr: ... # adamw default: 1e-3
-weight_decay: ... # adamw default: 0.01
-eps: 1e-8 # adamw default: 1e-8
+opt: adamw
+lr: ...
+weight_decay: ...
+filter_bias_and_bn: true
+
+# _target_: torch.optim.AdamW
+# _partial_: true
+# lr: ... # adamw default: 1e-3
+# weight_decay: ... # adamw default: 0.01
+# eps: 1e-8 # adamw default: 1e-8
