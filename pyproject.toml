@@ -58,6 +58,7 @@ gradio-patch-selection = { git = "https://github.com/dgcnz/gradio_patch_selector
 dev = [
     "gradio>=5.14.0",
     "gradio-patch-selection",
+    "ipykernel>=7.0.0a1",
     "jupyter>=1.1.1",
     "onnxscript>=0.3.0.dev20250409",
     "opencv-python>=4.11.0.86",
