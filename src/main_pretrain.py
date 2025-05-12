@@ -12,23 +12,15 @@ from lightning import Fabric
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
 import wandb
-from src.utils import pylogger, extras, checkpointer
+from src.utils import pylogger, extras, checkpointer, task_wrapper, get_metric_value
 from src.utils.instantiators import instantiate_callbacks, instantiate_loggers
 from src.engine_pretrain import train_one_epoch
 
 rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 
-
 log = pylogger.RankedLogger(__name__)
 
-
-def ieval(expr):
-    return hydra.utils.get_object(expr)
-
-
 OmegaConf.register_new_resolver("eval", eval)
-OmegaConf.register_new_resolver("ieval", ieval)
-
 
 def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
     # Set seed for reproducibility
@@ -127,6 +119,7 @@ def train(
     optimizer: torch.optim.Optimizer,
     scheduler: Optional[Any] = None,
     ckpt_path: Optional[str] = None,
+    ckpt_mode: str = "checkpoint",
     # Trainer arguments
     max_epochs: int = 1000,
     accumulate_grad_batches: int = 1,
@@ -137,16 +130,15 @@ def train(
 
     # Load checkpoint if provided
     if ckpt_path:
-        checkpoint_data = checkpointer.load_checkpoint(
+        last_epoch, global_step = checkpointer.load_checkpoint(
             fabric=fabric,
             model=model,
             optimizer=optimizer,
             scheduler=scheduler,
-            checkpoint_path=ckpt_path,
-            verbose=True,
+            ckpt_path=ckpt_path,
+            ckpt_mode=ckpt_mode,
         )
-        start_epoch = checkpoint_data["epoch"] + 1  # Resume from next epoch
-        global_step = checkpoint_data["global_step"]
+        start_epoch = last_epoch + 1
 
     # Call on_train_start at the start of training
     fabric.call(
@@ -198,6 +190,7 @@ def train(
     log.info("Training completed!")
 
 
+@task_wrapper
 def main(cfg: DictConfig) -> None:
     # Create output directory
     output_dir = Path(cfg.paths.output_dir)
@@ -220,7 +213,6 @@ def main(cfg: DictConfig) -> None:
         log.info(f"Number of parameters: {n_parameters / 1e6:.2f}M")
 
     # Get checkpoint path from config
-    ckpt_path = cfg.get("ckpt_path")
     try:
         train(
             fabric=fabric,
@@ -231,10 +223,13 @@ def main(cfg: DictConfig) -> None:
             max_epochs=cfg.trainer.get("max_epochs", 1000),
             accumulate_grad_batches=cfg.trainer.get("accumulate_grad_batches", 1),
             scheduler=scheduler,
-            ckpt_path=ckpt_path,
+            ckpt_path=cfg.get("ckpt_path"),
+            ckpt_mode=cfg.get("ckpt_mode", "checkpoint"),
             gradient_clip_val=cfg.trainer.get("gradient_clip_val", 0),
             track_grad_norm=cfg.trainer.get("track_grad_norm", False),
         )
+    except KeyboardInterrupt:
+        log.info("Training interrupted.")
     except Exception as e:
         log.error(f"Training failed with error: {e}")
         raise e
@@ -242,6 +237,14 @@ def main(cfg: DictConfig) -> None:
         if wandb.run:
             log.info("Closing wandb!")
             wandb.finish()
+
+    return dict(metric_collection.metrics), {
+        "fabric": fabric,
+        "model": model,
+        "optimizer": optimizer,
+        "scheduler": scheduler,
+        "train_dataloader": train_dataloader,
+    }
 
 
 @hydra.main(
@@ -253,7 +256,12 @@ def hydra_main(cfg: DictConfig) -> None:
     extras(cfg)
 
     # Train the model
-    main(cfg)
+    metrics, _ = main(cfg)
+
+    return get_metric_value(
+        metric_dict=metrics,
+        metric_name=cfg.get("optimized_metric"),
+    )
 
 
 if __name__ == "__main__":

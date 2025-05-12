@@ -172,7 +172,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # losses
         lambda_cos: float = 0.1,
         lambda_pose: float = 0.6,
-        lambda_patch: float = 0.3,
+        lambda_patch: float = 0.0,
         lambda_dino: float = 0.0,
         # pose loss
         criterion: str = "l1",
@@ -180,14 +180,17 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         alpha_ts: float = 0.5,
         alpha_s: float = 0.75,
         # patch loss
-        sigma: tuple[float, float, float, float] = (0.1, 0.1, 0.1, 0.1),
+        sigma: tuple[float, float, float, float] = (0.09, 0.09, 0.3, 0.3),
         # cosine alignment loss
         cos_eps: float = 1e-8,
+        # ...
+        debug: bool = False,
     ):
         """
         :param segment_embed_mode: 'permute' (random order), 'fixed' (same order), 'none'
         """
         super().__init__()
+        self.debug = debug
         self.embed_dim = embed_dim
         self.img_size = img_size
         self.canonical_img_size = canonical_img_size
@@ -203,7 +206,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             mask_ratio=mask_ratio,
             sampler=SAMPLERS[sampler],
         )
-        
+
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         num_patches = (img_size // patch_size) ** 2
         self.pos_embed = nn.Parameter(
@@ -247,22 +250,20 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             num_targets=self.num_targets,
             apply_tanh=apply_tanh,
         )
-        self.dino_head = None
-        if lambda_dino > 0:
-            self.dino_head = DINOHead(
-                in_dim=embed_dim,
-                use_bn=False,
-                nlayers=3,
-                hidden_dim=2048,
-                bottleneck_dim=256,
-            )
+        self.dino_head = DINOHead(
+            in_dim=embed_dim,
+            use_bn=False,
+            nlayers=3,
+            hidden_dim=2048,
+            bottleneck_dim=256,
+        )
         # default
         self.dino_loss = MCRLoss(
             ncrops=num_views,
-            reduce_cov=0, 
+            reduce_cov=0,
             expa_type=0,
             # eps: 0.05 is the one used for vit_b originally, but with batch size <= 128 it goes to NAN
-            eps=0.5, 
+            eps=0.5,
             coeff=1.0,
         )
         self.verbose = verbose
@@ -500,8 +501,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             x = blk(x)
         x = self.decoder_norm(x)
         return x
-        # return self.decoder_pred(x)
-        # return {"pose_pred": x}
 
     def random_masking(self, x: Tensor, mask_ratio: float):
         r"""
@@ -681,47 +680,45 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # pose head (without the cls tokens)
         pred_dT = self.pose_head(z[:, V:, :], joint_ids_remove)
 
+        # compute loss
+        patch_pos_nopos = _drop_pos(joint_positions, joint_ids_remove)
+        gt_dT = self._compute_gt(patch_pos_nopos, joint_params, shapes_list)
+        mask = self._create_mask(shapes_list, device).expand(B, -1, -1, 1)
+        losses = self._pose_loss(pred_dT, gt_dT, mask)
+        # ----------------
+        dino_loss_keys = ["loss_dino", "loss_dino_comp", "loss_dino_expa"]
         if self.lambda_dino:
             # joint_cls: [B, V, D]
             # DINO Loss assumes [V, B, D] instead of [B, V, D]
             student_z = self.dino_head(joint_cls.permute(1, 0, 2))
             teacher_z = student_z[: len(groups[0])].detach()  # Just the global views
-            L_dino, L_dino_comp, L_dino_expa = self.dino_loss(student_z, teacher_z)
+            dino_losses = self.dino_loss(student_z, teacher_z)
         else:
-            L_dino = L_dino_comp = L_dino_expa = 0.0
-
-        # compute loss
-        patch_pos_nopos = _drop_pos(joint_positions, joint_ids_remove)
-        gt_dT = self._compute_gt(patch_pos_nopos, joint_params, shapes_list)
-        mask = self._create_mask(shapes_list, device).expand(B, -1, -1, 1)
-        L_pose = self._pose_loss(pred_dT, gt_dT, mask)
-        # ----------------
+            dino_losses = [0.0] * len(dino_loss_keys)
+        losses.update(dict(zip(dino_loss_keys, dino_losses)))
 
         # Applying L_patch only on posmasked tokens
-        patches_nopos = _drop_pos(joint_patches, joint_ids_remove)
-        L_patch = (
-            self._patch_loss(patches_nopos, gt_dT) if self.lambda_patch > 0 else 0.0
-        )
-        L_cos = self._cosine_loss(pred_dT, gt_dT) if self.lambda_cos > 0 else 0.0
+        # TODO: replace these lines when on production.
+        # For now, we log L_patch even if lambda_patch=0
+        # patches_nopos = _drop_pos(joint_patches, joint_ids_remove)
+        # losses["loss_patch"] = self._patch_loss(patches_nopos, gt_dT)
+        losses["loss_patch"] = 0.0
+        # L_cos = self._cosine_loss(pred_dT, gt_dT) if self.lambda_cos > 0 else 0.0
+        losses["loss_cos"] = self._cosine_loss(pred_dT, gt_dT)
 
-        loss = self.lambda_pose * L_pose["loss_pose"]
-        loss = loss + self.lambda_patch * L_patch
-        loss = loss + self.lambda_cos * L_cos
-        loss = loss + self.lambda_dino * L_dino
+        loss = self.lambda_pose * losses["loss_pose"]
+        loss = loss + self.lambda_patch * losses["loss_patch"]
+        loss = loss + self.lambda_cos * losses["loss_cos"]
+        loss = loss + self.lambda_dino * losses["loss_dino"]
 
         return {
             "patch_positions_nopos": patch_pos_nopos,
+            "joint_ids_remove": joint_ids_remove,
             "shapes": shapes_list,
             "pred_dT": pred_dT,
             "gt_dT": gt_dT,
             "loss": loss,
-            "loss_pose": L_pose["loss_pose"],
-            "loss_patch": L_patch,
-            "loss_cos": L_cos,
-            "loss_dino": L_dino,
-            "loss_dino_comp": L_dino_comp,
-            "loss_dino_expa": L_dino_expa,
-            **L_pose,
+            **losses,
         }
 
 

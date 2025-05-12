@@ -5,10 +5,11 @@ import os
 import torch
 import sys
 import wandb
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, Literal
 from pathlib import Path
 from lightning import Fabric
 from lightning.fabric.wrappers import _unwrap_objects
+from torch import nn, optim
 
 from src.utils import pylogger
 
@@ -59,20 +60,19 @@ def save_checkpoint(
 
 def load_checkpoint(
     fabric: Fabric,
-    model: Any,
-    optimizer: Optional[Any] = None,
-    checkpoint_path: str = None,
+    model: nn.Module,
+    optimizer: Optional[optim.Optimizer] = None,
     scheduler: Optional[Any] = None,
-    verbose: bool = True,
-    strict: bool = True,
-) -> Dict[str, Any]:
+    ckpt_path: str = None,
+    ckpt_mode: Literal["checkpoint", "backbone"] = "checkpoint",
+) -> tuple[int, int]:
     """Load a model checkpoint.
     
     Args:
         fabric: Fabric instance
         model: Model to load checkpoint into
         optimizer: Optional optimizer to load checkpoint into
-        checkpoint_path: Path to checkpoint file
+        ckpt_path: Path to checkpoint file
         scheduler: Optional scheduler to load checkpoint into
         verbose: Whether to print logging information
         strict: Whether to enforce strict state dict loading
@@ -80,66 +80,23 @@ def load_checkpoint(
     Returns:
         Dictionary containing checkpoint metadata and any extra stored values
     """
-    if not os.path.exists(checkpoint_path):
-        log.info(f"No checkpoint found at {checkpoint_path}")
+    if not os.path.exists(ckpt_path):
+        log.info(f"No checkpoint found at {ckpt_path}")
         sys.exit(0)
     
-    log.info(f"Loading checkpoint from {checkpoint_path}")
+    log.info(f"Loading checkpoint from {ckpt_path}")
     
     state = {
         "model": model,
         "optimizer": optimizer,
         "scheduler": scheduler,
+        "global_step": 0,
+        "epoch": 0,
     }
-    
-    remainder = fabric.load(checkpoint_path, state, strict=strict)
-    return remainder
 
-
-def find_latest_checkpoint(
-    dirpath: str, 
-    pattern: str = "checkpoint-*.ckpt"
-) -> Optional[str]:
-    """Find the latest checkpoint in the directory.
+    if ckpt_mode == "backbone":
+        fabric.load_raw(ckpt_path, model, strict=False)
+        return 0, 0 
     
-    Args:
-        dirpath: Directory to search for checkpoints
-        pattern: Glob pattern for checkpoint files
-    
-    Returns:
-        Path to the latest checkpoint, or None if no checkpoints found
-    """
-    checkpoints = sorted(Path(dirpath).glob(pattern))
-    if not checkpoints:
-        return None
-    return str(checkpoints[-1])
-
-
-def get_checkpoint_path(
-    dirpath: str,
-    specific_checkpoint: Optional[str] = None,
-    use_last: bool = True
-) -> Optional[str]:
-    """Get the checkpoint path to use for loading.
-    
-    Args:
-        dirpath: Directory to search for checkpoints
-        specific_checkpoint: Optional specific checkpoint path to use
-        use_last: Whether to use the last.ckpt file
-    
-    Returns:
-        Path to the checkpoint to use, or None if no checkpoint found
-    """
-    # First try the specific checkpoint if provided
-    if specific_checkpoint and os.path.exists(specific_checkpoint):
-        return specific_checkpoint
-    
-    # Then try the last checkpoint if enabled
-    if use_last:
-        last_ckpt = os.path.join(dirpath, "last.ckpt")
-        if os.path.exists(last_ckpt):
-            return last_ckpt
-    
-    # Finally try to find the latest numbered checkpoint
-    return find_latest_checkpoint(dirpath)
-
+    fabric.load(ckpt_path, state, strict=True)
+    return state["epoch"], state["global_step"]

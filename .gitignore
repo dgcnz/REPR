@@ -179,3 +179,4 @@ outputs
 **/*.jpeg
 **/*.jpg
 output
+docs/papers/
