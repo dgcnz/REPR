@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - pretrain/in1k/partmae_v6/vit_b_16/_base
+  - pretrain/imagenette/partmae_v6/vit_b_16/_base
 
 compile: False
 

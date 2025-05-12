@@ -2,7 +2,7 @@
 defaults:
   - /scheduler: cosine
   - /optimizer: adamw
-  - override /data: in1k
+  - override /data: imagenette
   - override /model: pretrain/partmae_v6/vit_b_16_224
   - override /data/transform: multi_crop_v3
   - override /callbacks:
@@ -11,7 +11,7 @@ defaults:
     - common/iter_timer
   - override /logger: wandb
 
-tags: ["pretrain", "imagenet1k", "partmae_v6", "vit_b_16"]
+tags: ["pretrain", "imagenette", "partmae_v6", "vit_b_16"]
 
 seed: 12345
 float32_matmul_precision: "high"
@@ -21,9 +21,9 @@ callbacks:
   checkpoint: 
     every_n_epochs: 25
   metric_logger:
-    every_n_steps: 25
+    every_n_steps: 1
   iter_timer:
-    every_n_steps: 25
+    every_n_steps: 1
 
 data:
   transform:
@@ -88,4 +88,4 @@ compile_expr:
 logger:
   wandb:
     project: "PART-pretrain"
-    group: "imagenet1k/partmae_v6/vit_b_16"
+    group: "imagenette/partmae_v6/vit_b_16"
