@@ -20,6 +20,7 @@ dependencies = [
     "omegaconf>=2.3.0",
     "parameterized-transforms",
     "plotly>=6.1.0b0",
+    "protobuf==6.30.0",
     "pydantic==2.10.6",
     "rich>=14.0.0",
     "rootutils>=1.0.7",
@@ -36,6 +37,8 @@ dependencies = [
 [tool.uv]
 prerelease = "allow"
 package = true
+index-strategy = "unsafe-best-match"
+
 
 [build-system]
 requires = ["hatchling"]
@@ -48,9 +51,12 @@ include = ["src/**"]
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/nightly/cu128"
+default = false
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
 parameterized-transforms = { git = "https://github.com/dgcnz/parameterized-transforms" }
 gradio-patch-selection = { git = "https://github.com/dgcnz/gradio_patch_selector.git" }
 
@@ -63,6 +69,7 @@ dev = [
     "onnxscript>=0.3.0.dev20250409",
     "opencv-python>=4.11.0.86",
     "pandas>=2.2.3",
+    "poethepoet>=0.34.0",
     "pytest>=8.3.5",
     "pytest-benchmark>=5.1.0",
     "ruff>=0.11.4",
@@ -79,3 +86,23 @@ ignore = ["F722"]
 testpaths = [
     "tests",
 ]
+
+
+[tool.poe.tasks]
+profile_pretrain = """
+  sudo nsys profile \
+    -w true \
+    -t cuda,nvtx,osrt,cudnn,cublas \
+    -s cpu \
+    --capture-range cudaProfilerApi \
+    --capture-range-end stop \ 
+    --cudabacktrace=true \
+    -x true \
+    --gpu-metrics-devices all \
+    --cuda-memory-usage true \
+    --pytorch=autograd-nvtx \
+    --python-sampling=true \
+    --python-sampling-frequency=2000 \ 
+    -e WANDB_MODE=offline \
+    .venv/bin/python -m src.main_pretrain
+"""
