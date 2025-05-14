@@ -269,7 +269,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             reduce_cov=0,
             expa_type=0,
             # eps: 0.05 is the one used for vit_b originally, but with batch size <= 128 it goes to NAN
-            eps=0.5,
+            eps=dino_eps,
             coeff=1.0,
         )
         self.verbose = verbose
