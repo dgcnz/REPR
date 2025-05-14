@@ -184,6 +184,8 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         sigma: tuple[float, float, float, float] = (0.09, 0.09, 0.3, 0.3),
         # cosine alignment loss
         cos_eps: float = 1e-8,
+        # dino loss 
+        dino_eps: float = 0.5,
         # ...
         debug: bool = False,
         static_shapes: bool = True,
