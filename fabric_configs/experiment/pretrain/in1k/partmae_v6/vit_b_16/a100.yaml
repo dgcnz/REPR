@@ -11,7 +11,7 @@ trainer:
   strategy: ddp
   num_nodes: 1
   devices: 4
-  acumulate_grad_batches: 2
+  accumulate_grad_batches: 2
 
 scheduler:
   # 625 steps per epoch when effective batch size is 2048
