@@ -76,6 +76,7 @@ train_dataloader:
 
 metric_collection:
   _target_: src.models.components.metrics.partmae_v6.V6Metrics
+  nan_strategy: disable
 
 compile_kwargs:
   fullgraph: True

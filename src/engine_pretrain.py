@@ -31,16 +31,19 @@ def train_one_epoch(
     """Train model for one epoch. Logging and metrics are handled by callbacks."""
     model.train()
 
-    # Wrap data loader with progress bar
+    def ctx(step):
+        return {
+            "fabric": fabric,
+            "model": model,
+            "optimizer": optimizer,
+            "scheduler": scheduler,
+            "epoch": epoch,
+            "metric_collection": metric_collection,
+            "global_step": step,
+        }
+
     log.debug(f"on_train_epoch_start {epoch}")
-    fabric.call(
-        "on_train_epoch_start",
-        fabric=fabric,
-        model=model,
-        epoch=epoch,
-        global_step=global_step,
-        optimizer=optimizer,
-    )
+    fabric.call("on_train_epoch_start", **ctx(global_step))
 
     # Calculate number of optimization steps
     n_steps = len(data_loader) // accum_iter
@@ -55,18 +58,24 @@ def train_one_epoch(
 
     with tqdm(range(n_steps), **tqdm_kwargs) as pbar:
         for step in pbar:
-            torch.compiler.cudagraph_mark_step_begin()  
-            optimizer.zero_grad()
+            fabric.call("on_train_batch_start", **ctx(global_step))
+            torch.compiler.cudagraph_mark_step_begin()
 
+            optimizer.zero_grad()
             # Accumulate gradients over multiple batches
             for i in range(accum_iter):
                 batch = next(data_iter)
 
+                fabric.call("on_train_forward_start", **ctx(global_step))
                 outputs = model(*batch)
+                fabric.call("on_train_forward_end", **ctx(global_step))
+
                 loss = outputs["loss"] / accum_iter
 
                 with fabric.no_backward_sync(model, enabled=bool(i < accum_iter - 1)):
+                    fabric.call("on_train_backward_start", **ctx(global_step))
                     fabric.backward(loss)
+                    fabric.call("on_train_backward_end", **ctx(global_step))
 
             # Process is now at the end of accumulation or dataset
             outputs = apply_to_collection(outputs, Tensor, lambda x: x.detach())
@@ -77,10 +86,11 @@ def train_one_epoch(
 
             # Gradient clipping if enabled
             if clip_grad is not None and clip_grad > 0:
-                fabric.clip_gradients(model, optimizer, max_norm=clip_grad)
+                fabric.clip_gradients(model, optimizer, max_norm=clip_grad, error_if_nonfinite=False)
 
-            # Optimizer step
+            fabric.call("on_train_optimizer_step_start", **ctx(global_step))
             optimizer.step()
+            fabric.call("on_train_optimizer_step_end", **ctx(global_step))
 
             log.debug(f"Scheduler step {epoch}.")
             if scheduler is not None:
@@ -89,33 +99,16 @@ def train_one_epoch(
             # Update metrics and call callbacks
             fabric.call(
                 "on_train_batch_end",
-                fabric=fabric,
-                model=model,
                 outputs=outputs,
                 batch=batch,  # Last batch processed
                 batch_idx=step * accum_iter,
-                global_step=global_step,
-                epoch=epoch,
-                metric_collection=metric_collection,
-                optimizer=optimizer,
+                **ctx(global_step),
             )
 
             global_step += 1
 
     log.debug(f"Epoch {epoch} ended.")
-    fabric.call(
-        "on_train_epoch_end",
-        fabric=fabric,
-        model=model,
-        epoch=epoch,  # Using current epoch instead of epoch+1
-        global_step=global_step,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        metric_collection=metric_collection,
-    )
-
-
-    log.debug(f"Finished train_one_epoch {epoch}.")
+    fabric.call("on_train_epoch_end", **ctx(global_step))
     return global_step
 
 

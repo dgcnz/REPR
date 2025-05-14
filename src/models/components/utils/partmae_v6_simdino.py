@@ -42,6 +42,7 @@ class PARTMaskedAutoEncoderViTFromSimDINO(PARTMaskedAutoEncoderViT):
             "segment_embed",
             "pose_head.linear.weight",
             "_patch_loss.sigma",
+            "intra_mask",
         ]
         other_miss = [
             k for k in miss if not any(k.startswith(p) for p in allowed_prefixes)

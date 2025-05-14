@@ -2,7 +2,7 @@ import torch
 from torch import nn, Tensor
 import math
 from jaxtyping import Int, Float
-from typing import Union, Tuple
+from typing import Tuple
 from torch.nn.modules.utils import _pair
 
 

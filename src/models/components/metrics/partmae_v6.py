@@ -11,33 +11,38 @@ log = RankedLogger(__name__)
 class V6Metrics(WrapperMetric):
     metrics: dict[str, Metric]
 
-    def __init__(self, **metric_kwargs):
+    def __init__(self, nan_strategy='disable', sync_on_compute = False):
         super().__init__()
+        mean_kwargs = {
+            "nan_strategy": nan_strategy,
+            "sync_on_compute": sync_on_compute,
+        }
+        mse_kwargs = {"sync_on_compute": sync_on_compute}
         self.metrics = nn.ModuleDict(
             {
-                "loss_pose_intra_t": MeanMetric(**metric_kwargs),
-                "loss_pose_inter_t": MeanMetric(**metric_kwargs),
-                "loss_pose_intra_s": MeanMetric(**metric_kwargs),
-                "loss_pose_inter_s": MeanMetric(**metric_kwargs),
-                "loss_pose_t": MeanMetric(**metric_kwargs),
-                "loss_pose_s": MeanMetric(**metric_kwargs),
-                "loss_pose": MeanMetric(**metric_kwargs),
-                "loss_patch": MeanMetric(**metric_kwargs),
-                "loss_cos": MeanMetric(**metric_kwargs),
-                "loss_dino": MeanMetric(**metric_kwargs),
-                "loss_dino_comp": MeanMetric(**metric_kwargs),
-                "loss_dino_expa": MeanMetric(**metric_kwargs),
-                "loss": MeanMetric(**metric_kwargs),
+                "loss_pose_intra_t": MeanMetric(**mean_kwargs),
+                "loss_pose_inter_t": MeanMetric(**mean_kwargs),
+                "loss_pose_intra_s": MeanMetric(**mean_kwargs),
+                "loss_pose_inter_s": MeanMetric(**mean_kwargs),
+                "loss_pose_t": MeanMetric(**mean_kwargs),
+                "loss_pose_s": MeanMetric(**mean_kwargs),
+                "loss_pose": MeanMetric(**mean_kwargs),
+                "loss_patch": MeanMetric(**mean_kwargs),
+                "loss_cos": MeanMetric(**mean_kwargs),
+                "loss_dino": MeanMetric(**mean_kwargs),
+                "loss_dino_comp": MeanMetric(**mean_kwargs),
+                "loss_dino_expa": MeanMetric(**mean_kwargs),
+                "loss": MeanMetric(**mean_kwargs),
                 ### non-loss
-                "pred_dt_std": MeanMetric(**metric_kwargs),
-                "pred_ds_std": MeanMetric(**metric_kwargs),
-                "gt_dt_std": MeanMetric(**metric_kwargs),
-                "gt_ds_std": MeanMetric(**metric_kwargs),
-                "rmse_pred_dt": MeanSquaredError(squared=True, **metric_kwargs),
-                "rmse_pred_ds": MeanSquaredError(squared=True, **metric_kwargs),
+                "pred_dt_std": MeanMetric(**mean_kwargs),
+                "pred_ds_std": MeanMetric(**mean_kwargs),
+                "gt_dt_std": MeanMetric(**mean_kwargs),
+                "gt_ds_std": MeanMetric(**mean_kwargs),
+                "rmse_pred_dt": MeanSquaredError(squared=True, **mse_kwargs),
+                "rmse_pred_ds": MeanSquaredError(squared=True, **mse_kwargs),
                 ### gradient norms
-                "grad_mean_norm": MeanMetric(**metric_kwargs),
-                "grad_max_norm": MaxMetric(**metric_kwargs),
+                "grad_mean_norm": MeanMetric(**mean_kwargs),
+                "grad_max_norm": MaxMetric(**mean_kwargs),
             }
         )
 
