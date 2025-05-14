@@ -11,12 +11,13 @@ trainer:
   strategy: ddp
   num_nodes: 1
   devices: 4
-  # accumulate_grad_batches: 8
+  acumulate_grad_batches: 2
 
 scheduler:
+  # 625 steps per epoch when effective batch size is 2048
   warmup_t: 6250 # 10 epochs * 625 steps/epoch
   t_initial: 125000 # 200 epochs * 625 steps/epoch
 
 train_dataloader:
-  batch_size: 512
+  batch_size: 256
   num_workers: 16
