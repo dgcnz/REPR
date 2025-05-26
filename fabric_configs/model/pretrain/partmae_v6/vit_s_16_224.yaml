@@ -1,6 +1,7 @@
 _target_: src.models.components.partmae_v6.PARTMaskedAutoEncoderViT
 
 img_size: 224
+local_img_size: 96
 canonical_img_size: 512
 max_scale_ratio: 6.0 # a bit more than the real value
 
@@ -18,33 +19,44 @@ mask_ratio: 0.75
 pos_mask_ratio: 0.75
 num_views: ???
 
+# decoder
 decoder_embed_dim: 512
 decoder_depth: 8
 decoder_num_heads: 16
 
+# projection head
+proj_bottleneck_dim: 256
+
+# pose head
 apply_tanh: false
-segment_embed_mode: none
+sampler: stratified_jittered
 
 # losses
 
-lambda_cos:  0.1
-lambda_pose:  0.6
-lambda_patch:  0.3
+## multipliers
+lambda_pose:  1.0
+
+lambda_psmooth:  0
+lambda_pcr: 0
+
+lambda_ccr: 0
+lambda_cinv: 0
+
 
 # pose loss
-sampler: stratified_jittered
 criterion: l1
 
 alpha_t: 0.5
 alpha_ts: 0.8
 alpha_s: 1.0
 
-# patch loss
-sigma:
-  - 0.1
-  - 0.1
-  - 0.1
-  - 0.1
+# patch losses (smoothness + coding rate)
+sigma_yx: 0.09
+sigma_hw: 0.3
+
+# class losses (class invariance + class coding rate)
+cr_eps: 0.1
+
 
 # cosine loss
 cos_eps: 1e-8

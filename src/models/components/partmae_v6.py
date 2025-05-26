@@ -1,4 +1,3 @@
-from itertools import groupby, accumulate
 import torch
 import math
 from torch import nn, Tensor
@@ -18,9 +17,8 @@ from src.models.components.utils.offgrid_pos_embed import (
 )
 from torch.nn.modules.utils import _pair
 from jaxtyping import Int, Float
-from typing import Literal
 from src.models.components.heads.dino_head import DINOHead
-from src.models.components.loss.simdino import MCRLoss
+import torch.nn.functional as F
 
 
 class PoseLoss(nn.Module):
@@ -37,9 +35,14 @@ class PoseLoss(nn.Module):
         self.alpha_s = alpha_s
         self.alpha_ts = alpha_ts
 
-    def forward(self, pred_dT: Tensor, gt_dT: Tensor, mask: Tensor) -> Tensor:
+    def forward(self, pred_dT: Tensor, gt_dT: Tensor, Ms: Tensor) -> Tensor:
+        device, B, V = pred_dT.device, pred_dT.shape[0], Ms.shape[0]
+
         loss_full = self.criterion(pred_dT, gt_dT, reduction="none")
 
+        view_ids = torch.arange(V, device=device).repeat_interleave(Ms)
+        mask = (view_ids[None, :] == view_ids[:, None]).float()
+        mask = mask[None, ..., None].expand(B, -1, -1, 1)
         diag, offdiag = mask.sum(), (1 - mask).sum()
 
         loss_intra_t = (loss_full[..., :2] * mask).sum() / diag
@@ -60,38 +63,153 @@ class PoseLoss(nn.Module):
         }
 
 
-class PatchLoss(nn.Module):
-    def __init__(self, sigma: tuple[float, float, float, float] = (0.1, 0.1, 0.1, 0.1)):
+class PatchSmoothnessLoss(nn.Module):
+    """
+    Graph-Laplacian smoothness
+
+    params:
+        sigma_yx: bandwidth for spatial offsets (dy, dx)
+        sigma_hw: bandwidth for log‐scale offsets (dlogh, dlogw)
+    """
+
+    def __init__(
+        self,
+        sigma_yx: float = 0.09,
+        sigma_hw: float = 0.30,
+    ):
         super().__init__()
-        self.register_buffer("sigma", torch.tensor(sigma, dtype=torch.float32))
+        # sigma² per‐dimension: [dy, dx, dlogh, dlogw]
+        self.register_buffer(
+            "sigma2",
+            torch.tensor(
+                [sigma_yx**2, sigma_yx**2, sigma_hw**2, sigma_hw**2],
+                dtype=torch.float32,
+            ),
+            persistent=False,
+        )
 
-    def forward(self, z: torch.Tensor, gt_dT: torch.Tensor) -> torch.Tensor:
-        _, T, _ = z.shape
+    @staticmethod
+    def _laplacian_energy(z: Tensor, w: Tensor) -> Tensor:
+        """
+        Compute batch-wise tr(Zᵀ L Z) where L = D - W.
+        z: (B, T, D)
+        w: (B, T, T) positive affinity matrix
+        returns: (B,)
+        """
+        # degree d_i = ∑_j w_ij
+        d = w.sum(-1)  # (B, T)
+        # z² norms
+        z2 = (z * z).sum(-1)  # (B, T)
+        # ∑_j w_ij z_j
+        wz = torch.bmm(w, z)  # (B, T, D)
 
-        # 1) compute weights w_ij
-        kernel = (gt_dT.pow(2) / (2 * self.sigma.pow(2))).sum(dim=-1)  # [B,T,T]
-        w = torch.exp(-kernel)
+        # tr(Zᵀ D Z) − 2 tr(Zᵀ W Z) + tr(Zᵀ W Z)
+        # = ∑_i d_i ‖z_i‖² − 2 ∑_i z_i·(∑_j w_ij z_j) + ∑_j d_j ‖z_j‖²
+        term1 = (z2 * d).sum(-1)
+        term2 = 2 * (wz * z).sum((-1, -2))
+        term3 = (z2.unsqueeze(1) * w).sum((-1, -2))
+        return term1 - term2 + term3
 
-        # 2) precompute ‖z_i‖²
-        z2 = (z * z).sum(dim=-1)  # [B,T]
+    def forward(
+        self, z: Float[Tensor, "B T D"], gt_dT: Float[Tensor, "B T T 4"]
+    ) -> Float[Tensor, "1"]:
+        """
+        :param z:    L2-normalized patch embeddings
+        :param gt_dT: normalized [dy, dx, dlogh, dlogw]
+        """
 
-        # 3) term1 = Σ_i ‖z_i‖² (Σ_j w_ij)
-        w_col_sum = w.sum(dim=2)  # [B,T] (sum over j for fixed i)
-        term1 = (z2 * w_col_sum).sum(dim=1)  # [B]
+        # --- 1) Gaussian kernel w_ij ---
+        w = (gt_dT.pow(2) / (2 * self.sigma2)).sum(-1)  # (B, T, T)
+        w = torch.exp(-w)  # (B, T, T)
 
-        # 4) term2 = Σ_i z_iᵀ (Σ_j w_ij z_j)
-        wz = torch.bmm(w, z)  # [B,T,D]
-        term2 = (wz * z).sum(dim=(1, 2))  # [B]
+        # --- 2) Laplacian smoothness term ---
+        num = self._laplacian_energy(z, w)  # (B,)
+        denom = w.sum((-1, -2)).clamp(min=1e-6)  # (B,)
+        lap = num / denom  # (B,)
+        return lap.mean()
 
-        # 5) term3 = Σ_j ‖z_j‖² (Σ_i w_ij)
-        w_row_sum = w.sum(dim=1)  # [B,T] (sum over i for fixed j)
-        term3 = (z2 * w_row_sum).sum(dim=1)  # [B]
 
-        # 6) combine & normalize
-        # Loss per batch item = term1 - 2*term2 + term3
-        # mean over patch pairs (i,j) and batch
-        loss = (term1 - 2 * term2 + term3).mean() / (T * T)
+class PatchCodingRateLoss(nn.Module):
+    def __init__(self, embed_dim: int, eps: float = 0.5):
+        super().__init__()
+        self.eps = eps
+        self.register_buffer(
+            "I", torch.eye(embed_dim, dtype=torch.float32), persistent=False
+        )
+
+    def forward(self, z: Float[Tensor, "B T D"]) -> Float[Tensor, "1"]:
+        """
+        :param z: l2 normalized patch embeddings
+        """
+        _, T, D = z.shape
+
+        # 1) batched covariance: [B, D, T] @ [B, D, T] → [B, D, D]
+        cov = torch.bmm(z.transpose(1, 2), z)
+
+        # 2) form I + α·cov  (broadcasting I over the batch dim)
+        alpha = D / (T * self.eps)
+        cov = alpha * cov + self.I  # shape [B, D, D]
+
+        # 3) batch log determinant of I + α·cov
+        expa = (
+            torch.linalg.cholesky_ex(cov)[0]
+            .diagonal(dim1=-2, dim2=-1)
+            .log()
+            .sum(dim=1)
+            .mean()
+        )
+
+        # 4) final γ‐scaling
+        gamma = (D + T) / (D * T)
+        return expa * gamma
+
+
+class CLSCodingRateLoss(nn.Module):
+    # expansion loss for MCR
+    def __init__(self, embed_dim: int, eps: float, gV: int):
+        super().__init__()
+        self.eps = eps
+        self.gV = gV  # number of global views
+        self.register_buffer(
+            "I", torch.eye(embed_dim, dtype=torch.float32), persistent=False
+        )
+
+    def forward(self, z: Float[Tensor, "V B D"]) -> Tensor:
+        """
+        :param z: l2 normalized patch embeddings (student)
+        """
+        V, B, D = z.shape
+        z = z[: self.gV]  # only use global views for CLS coding rate loss
+        cov = torch.bmm(z.transpose(1, 2), z)  # [V, D, D]
+        scalar = D / (B * self.eps)
+        loss = (
+            torch.linalg.cholesky_ex(self.I + scalar * cov)[0]
+            .diagonal(dim1=-2, dim2=-1)
+            .log()
+            .sum(dim=1)
+            .mean()
+        )
+        loss *= (D + B) / (D * B)
+        # the balancing factor gamma, you can also use the next line. This is ultimately a heuristic, so feel free to experiment.
+        # loss *= ((self.eps *  B) ** 0.5 / D)
         return loss
+
+
+class CLSInvarianceLoss(nn.Module):
+    # compression loss for MCR
+    def __init__(self):
+        super().__init__()
+
+    def forward(
+        self, z_stu: Float[Tensor, "V B D"], z_tea: Float[Tensor, "V B D"]
+    ) -> Tensor:
+        sim = F.cosine_similarity(z_tea.unsqueeze(1), z_stu.unsqueeze(0), dim=-1)
+        # Trick to fill diagonal
+        sim.view(-1, sim.shape[-1])[:: (len(z_stu) + 1), :].fill_(0)
+        n_loss_terms = len(z_tea) * len(z_stu) - min(len(z_tea), len(z_stu))
+        # Sum the cosine similarities
+        comp_loss = sim.mean(2).sum() / n_loss_terms
+        return -comp_loss  # negative because we want to maximize similarity
 
 
 class CosineAlignmentLoss(nn.Module):
@@ -121,20 +239,29 @@ class PoseHead(nn.Module):
         self.linear = nn.Linear(embed_dim, num_targets, bias=False)
         self.tanh = nn.Tanh() if apply_tanh else nn.Identity()
 
-    def forward(self, z, ids_remove):
-        patch_pred = self.linear(z)
-        pose_pred_nopos = _drop_pos(patch_pred, ids_remove)
-        pose_u = pose_pred_nopos.unsqueeze(2)
-        pose_v = pose_pred_nopos.unsqueeze(1)
+    def forward(self, z):
+        pose_pred = self.linear(z)
+        pose_u = pose_pred.unsqueeze(2)
+        pose_v = pose_pred.unsqueeze(1)
         pred_dT = self.tanh(pose_u - pose_v)
         return pred_dT
 
 
 def _drop_pos(
-    x: Float[Tensor, "B N K"], ids_remove: Int[Tensor, "B M"]
+    x: Float[Tensor, "B N K"], ids: Int[Tensor, "B M"]
 ) -> Float[Tensor, "B M K"]:
-    idx = ids_remove.unsqueeze(-1).expand(-1, -1, x.shape[-1])
-    return torch.gather(x, dim=1, index=idx)
+    batch_idx = torch.arange(x.size(0), device=x.device)[:, None]  # → [B,1]
+    return x[batch_idx, ids]  # → [B, M, K]
+
+
+def drop_pos_2d(
+    x: Float[Tensor, "B N N K"],
+    ids: Int[Tensor, "B M"],
+) -> Float[Tensor, "B M M K"]:
+    batch_idx = torch.arange(x.size(0), device=x.device)[:, None, None]
+    row_idx = ids[:, :, None]
+    col_idx = ids[:, None, :]
+    return x[batch_idx, row_idx, col_idx]  # → [B, M, M, K]
 
 
 SAMPLERS = {
@@ -165,36 +292,36 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         decoder_depth: int = 8,
         decoder_num_heads: int = 16,
         sampler: str = "random",
-        verbose: bool = False,
         num_views: int = 12,  # default is 2 global 10 local
-        segment_embed_mode: Literal["permute", "none", "fixed"] = "none",
         freeze_encoder: bool = False,
         apply_tanh: bool = True,
         # losses
-        lambda_cos: float = 0.1,
         lambda_pose: float = 0.6,
-        lambda_patch: float = 0.0,
-        lambda_dino: float = 0.0,
+        # patch losses
+        lambda_psmooth: float = 0.0,
+        lambda_pcr: float = 0.0,
+        # class losses
+        lambda_ccr: float = 0.0,  # match them (ccr = cinv)
+        lambda_cinv: float = 0.0,
+        # cosine alignment loss
+        lambda_cos: float = 0.0,
         # pose loss
         criterion: str = "l1",
         alpha_t: float = 0.5,
         alpha_ts: float = 0.5,
         alpha_s: float = 0.75,
         # patch loss
-        sigma: tuple[float, float, float, float] = (0.09, 0.09, 0.3, 0.3),
+        sigma_yx: float = 0.09,
+        sigma_hw: float = 0.30,
+        cr_eps: float = 0.5,
         # cosine alignment loss
         cos_eps: float = 1e-8,
-        # dino loss 
-        dino_eps: float = 0.5,
-        # ...
-        debug: bool = False,
-        static_shapes: bool = True,
+        # dino loss
+        proj_bottleneck_dim: int = 256,
+        # ..
     ):
-        """
-        :param segment_embed_mode: 'permute' (random order), 'fixed' (same order), 'none'
-        """
+        """ """
         super().__init__()
-        self.debug = debug
         self.embed_dim = embed_dim
         self.img_size = img_size
         self.local_img_size = local_img_size
@@ -204,7 +331,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.pos_mask_ratio = pos_mask_ratio
         self.max_scale_ratio = max_scale_ratio
 
-        self.static_shapes = static_shapes
         self.patch_embed = OffGridPatchEmbed(
             patch_size=patch_size,
             in_chans=in_chans,
@@ -261,18 +387,16 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             use_bn=False,
             nlayers=3,
             hidden_dim=2048,
-            bottleneck_dim=256,
+            bottleneck_dim=proj_bottleneck_dim,
         )
-        # default
-        self.dino_loss = MCRLoss(
-            ncrops=num_views,
-            reduce_cov=0,
-            expa_type=0,
-            # eps: 0.05 is the one used for vit_b originally, but with batch size <= 128 it goes to NAN
-            eps=dino_eps,
-            coeff=1.0,
+
+        # SimDINO losses
+        self._ccr_loss = CLSCodingRateLoss(
+            embed_dim=proj_bottleneck_dim,
+            eps=cr_eps,
+            gV=2,  # global views
         )
-        self.verbose = verbose
+        self._cinv_loss = CLSInvarianceLoss()
 
         # losses
         self._pose_loss = PoseLoss(
@@ -281,32 +405,48 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             alpha_s=alpha_s,
             alpha_ts=alpha_ts,
         )
-        self._patch_loss = PatchLoss(sigma=sigma)
+        self._psmooth_loss = PatchSmoothnessLoss(sigma_yx=sigma_yx, sigma_hw=sigma_hw)
+        self._pcr_loss = PatchCodingRateLoss(embed_dim=proj_bottleneck_dim, eps=cr_eps)
         self._cosine_loss = CosineAlignmentLoss(eps=cos_eps)
-        self.lambda_pose = lambda_pose
-        self.lambda_patch = lambda_patch
-        self.lambda_cos = lambda_cos
-        self.lambda_dino = lambda_dino
 
-        # Instead of using nn.Embedding, use a raw parameter for view-specific segment embeddings.
+        self.lambdas = {
+            "loss_pose": lambda_pose,
+            "loss_psmooth": lambda_psmooth,
+            "loss_pcr": lambda_pcr,
+            "loss_ccr": lambda_ccr,
+            "loss_cinv": lambda_cinv,
+            "loss_cos": lambda_cos,
+        }
+
         self.num_views = num_views
-        self.segment_embed_mode = segment_embed_mode
-        if self.segment_embed_mode == "none":
-            self.register_buffer("segment_embed", torch.zeros(num_views, embed_dim))
-        else:
-            self.segment_embed = nn.Parameter(torch.randn(num_views, embed_dim))
-
         self.initialize_weights()
         if freeze_encoder:
             self.freeze_encoder()
 
-        self.register_buffer("intra_mask", self._create_mask(self._create_shapes(), device="cpu"))
+        self._cache_shapes()
 
-        
-    def _create_shapes(self):
-        return [(self.img_size, self._get_N(self.img_size)[1], 2),
-                (self.local_img_size, self._get_N(self.local_img_size)[1], self.num_views - 2)]
+    def _cache_shapes(self):
+        (gN, gM), gV = self._get_N(self.img_size), 2
+        (lN, lM), lV = self._get_N(self.local_img_size), self.num_views - 2
+        Ns = [gN] * gV + [lN] * lV
+        Ms = [gM] * gV + [lM] * lV
+        Is = [self.img_size] * gV + [self.local_img_size] * lV
+        keys = ["gN", "gM", "gV", "lN", "lM", "lV", "Ns", "Ms", "Is"]
+        values = [gN, gM, gV, lN, lM, lV, Ns, Ms, Is]
+        for k, v in zip(keys, values):
+            # have cpu/int and cuda tensors
+            self._register_or_overwrite_buffer(k, v)
+            setattr(self, f"_{k}", v)
 
+    def _register_or_overwrite_buffer(self, name: str, value: int | list[int]):
+        if hasattr(self, name):
+            old = getattr(self, name)
+            new = torch.tensor(value, dtype=torch.int32, device=old.device)
+            setattr(self, name, new)
+        else:
+            self.register_buffer(
+                name, torch.tensor(value, dtype=torch.int32), persistent=False
+            )
 
     def freeze_encoder(self):
         r"""
@@ -345,6 +485,25 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         if sampler is not None:
             self.patch_embed.sampler = SAMPLERS[sampler]
 
+        if mask_ratio is not None or pos_mask_ratio is not None:
+            self._cache_shapes()
+
+    def _validate_shapes(self, x: list[Float[Tensor, "B gV|lV C H W"]]):
+        if len(x) not in (1, 2):
+            raise ValueError(f"Expected 1 or 2 views, got {len(x)}")
+
+        gV_actual = x[0].shape[1]
+        lV_actual = x[1].shape[1] if len(x) == 2 else 0
+
+        if self.training:
+            if gV_actual != self._gV or lV_actual != self._lV:
+                raise ValueError(
+                    f"Expected {self._gV} global views and {self._lV} local views, "
+                    f"but got {gV_actual} global views and {lV_actual} local views."
+                )
+        else:
+            if gV_actual != self._gV or lV_actual != self._lV:
+                self._cache_shapes()
 
     def initialize_weights(self):
         r"""
@@ -372,24 +531,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
-
-    def encode_views(self, x: Tensor) -> dict:
-        r"""
-        Encode a batch of views.
-
-        :param x: Tensor of shape [B, V, C, H, W]
-        :return: Dict with keys:
-                 "z_enc": Tensor of shape [B, V, N+1, D] (N visible patches + 1 class token),
-                 "patch_positions_vis": Tensor of shape [B, V, N, 2] (N visible patch positions),
-                 "ids_remove_pos": Tensor of shape [B, V, M] (M indices of masked tokens)
-        """
-        B, V, C, H, W = x.shape
-        x_flat = x.view(B * V, C, H, W)
-        out = self.forward_encoder(x_flat)
-        out["z_enc"] = out["z_enc"].view(B, V, -1, self.embed_dim)
-        out["patch_positions_vis"] = out["patch_positions_vis"].view(B, V, -1, 2)
-        out["ids_remove_pos"] = out["ids_remove_pos"].view(B, V, -1)
-        return out
 
     def prepare_tokens(self, x: Tensor):
         # 1. (Off-grid) Patch (sub-)sampling and embedding
@@ -431,15 +572,11 @@ class PARTMaskedAutoEncoderViT(nn.Module):
                  "patch_positions_vis": Tensor of shape [B*n_views, N_vis, 2],
                  "ids_remove_pos": Tensor of shape [B*n_views, M] (M indices of masked tokens)
         """
-        x, patch_positions_vis, ids_remove = self.prepare_tokens(x)
+        x, patch_positions_vis, ids_remove_pos = self.prepare_tokens(x)
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
-        return {
-            "z_enc": x,
-            "patch_positions_vis": patch_positions_vis,
-            "ids_remove_pos": ids_remove,
-        }
+        return x, patch_positions_vis, ids_remove_pos
 
     def forward_decoder(self, z: Tensor) -> dict:
         r"""
@@ -481,8 +618,8 @@ class PARTMaskedAutoEncoderViT(nn.Module):
     def _compute_gt(
         self,
         patch_pos_nopos: Int[Tensor, "B T 2"],
-        params: Int[Tensor, "B T 4"],
-        shapes: list,
+        params: Int[Tensor, "B V 4"],
+        token_sizes: Int[Tensor, "V"],
     ) -> Tensor:
         r"""
         Compute ground-truth pairwise differences using per-token crop sizes.
@@ -492,14 +629,8 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         :param shapes: list of tuples (crop_size, M, V)
         :return: Tensor of shape [B, T, T, 4] (pairwise differences)
         """
-        device = patch_pos_nopos.device
-        B = patch_pos_nopos.shape[0]
-
-        crop_sizes = torch.cat(
-            [torch.full((M * V, 1), cs, device=device) for cs, M, V in shapes]
-        )[None].expand(B, -1, -1)
-
-        canonical_size = self.canonical_img_size
+        params = params.repeat_interleave(token_sizes, dim=1)
+        crop_sizes = self.Is.float().repeat_interleave(token_sizes)[None, :, None]
 
         # Extract crop parameters: [x,y] offsets and [width,height]
         offset = params[..., :2]  # Top-left corner coordinates
@@ -524,38 +655,10 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         gt_dT = gt_pose.unsqueeze(2) - gt_pose.unsqueeze(1)  # [B, T, T, 4]
 
         # Normalize the differences for stable learning
-        gt_dT[..., :2] /= canonical_size  # Normalize positions by canonical image size
-        gt_dT[..., 2:] /= math.log(self.max_scale_ratio)  # Normalize log sizes
+        gt_dT[..., :2] /= self.canonical_img_size
+        gt_dT[..., 2:] /= math.log(self.max_scale_ratio)
 
         return gt_dT
-
-    def _create_mask(self, shapes, device):
-        # !! torch.compile-compliant:
-        #   - Build labels list in Python to avoid data-dependent tensor creation.
-        # resgroup_idx  is the resolution group index
-        # in_resgroup_idx is the index of the view within that group
-        # torch.cuda.nvtx.range_push("forward: build resgroup idx")
-        resgroup_idx, in_resgroup_idx = torch.tensor(
-            [
-                (i, j)
-                for i, (_, M, V) in enumerate(shapes)
-                for j in range(V)  # each view in that group
-                for _ in range(M)  # one entry per patch
-            ],
-            device=device,
-        ).unbind(1)
-        # torch.cuda.nvtx.range_pop()
-
-        # Build intra- and inter-view masks
-        # mask tells use which patches belong to the same view
-        # torch.cuda.nvtx.range_push("forward: build mask")
-        mask = resgroup_idx[:, None] == resgroup_idx[None, :]
-        mask = mask & (in_resgroup_idx[:, None] == in_resgroup_idx[None, :])
-        # torch.cuda.nvtx.range_pop()
-        # torch.cuda.nvtx.range_push("forward: build mask float")
-        mask = mask.float()[None, ..., None]
-        # torch.cuda.nvtx.range_pop()
-        return mask
 
     def _get_N(self, crop_size: int) -> tuple[int, int]:
         N = (crop_size // self.patch_size) ** 2
@@ -563,173 +666,78 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         N_pos = int(N_vis * (1 - self.pos_mask_ratio))
         return N_vis, N_vis - N_pos
 
-    def _encode_resgroup(self, x, params, indices: list[int], seg_embed, base_offset, N_vis):
-        # torch.cuda.nvtx.range_push("forward: encode resgroup")
-        # torch.cuda.nvtx.range_push("forward: stack groups")
-        device = x[0].device
-        group_x = torch.stack([x[i] for i in indices], dim=1)
-        group_params = torch.stack([params[i] for i in indices], dim=1)
-        # torch.cuda.nvtx.range_pop()
+    def _encode_resgroup(
+        self,
+        x: Float[Tensor, "B gV|lV C H W"],
+    ):
+        B, V, _, _, _ = x.shape
+        z, patch_positions_vis, ids_remove_pos = self.forward_encoder(x.flatten(0, 1))
+        N_vis, N_nopos = patch_positions_vis.shape[-2], ids_remove_pos.shape[-1]
 
-        # torch.cuda.nvtx.range_push("forward: encode views")
-        enc = self.encode_views(group_x)
-        # torch.cuda.nvtx.range_pop()
-
-
-        # torch.cuda.nvtx.range_push("forward: segment embedding")
-        if self.segment_embed_mode != "none":
-            enc["z_enc"] = enc["z_enc"] + seg_embed[indices].unsqueeze(0).unsqueeze(2)
-        # torch.cuda.nvtx.range_pop()
-
-        # torch.cuda.nvtx.range_push("forward: index cls and patch tokens")
-        B = group_x.shape[0]
-        cls_tokens = enc["z_enc"][:, :, 0, :]
-        flat_patches = enc["z_enc"][:, :, 1:, :].flatten(1, 2)
-        flat_positions = enc["patch_positions_vis"].flatten(1, 2)
-        # torch.cuda.nvtx.range_pop()
-
-        M = enc["ids_remove_pos"].shape[2]
-
-        # torch.cuda.nvtx.range_push("forward: build offsets")
-        view_offsets = (torch.arange(len(indices), device=device) * N_vis).view(
-            1, len(indices), 1
-        )
-        # torch.cuda.nvtx.range_pop()
-        # torch.cuda.nvtx.range_push("forward: build ids_remove")
-        flat_ids_remove = (enc["ids_remove_pos"] + view_offsets + base_offset).view(
-            B, -1
-        )
-        # torch.cuda.nvtx.range_pop()
-        # torch.cuda.nvtx.range_push("forward: expand params")
-        expanded_params = (
-            group_params[:, :, 4:8].unsqueeze(2).expand(-1, -1, M, -1).flatten(1, 2)
-        )
-        # torch.cuda.nvtx.range_pop()
-        # torch.cuda.nvtx.range_push("forward: build shape")
-        shape = (group_x.shape[-2], M, len(indices))
-        # torch.cuda.nvtx.range_pop()
-
-        # torch.cuda.nvtx.range_pop()
         return (
-            cls_tokens,
-            flat_patches,
-            flat_positions,
-            flat_ids_remove,
-            expanded_params,
-            shape,
+            z[:, 0].reshape(B, V, -1),  # cls token # [B, V, D]
+            z[:, 1:].reshape(B, V * N_vis, -1),  # patches # [B, V * N_vis, D]
+            patch_positions_vis.reshape(B, V * N_vis, -1),  # positions #
+            ids_remove_pos.reshape(B, V * N_nopos),  # ids_remove
         )
 
-    def forward(self, x: list[Tensor], params: list[Tensor]) -> dict:
-        device = x[0].device
-        B, V = x[0].shape[0], len(x)
-        assert V == self.num_views
+    def forward(
+        self,
+        x: list[Float[Tensor, "B gV|lV C gS|lS gW|lW"]],
+        params: list[Float[Tensor, "B gV|lV 19"]],
+    ) -> dict:
+        assert 1 <= len(x) <= 2, "Global or global + local views are supported"
+        self._validate_shapes(x)
+        assert len(x) == len(params), "x and params must have the same length"
+        params = torch.cat([p[:, :, 4:8] for p in params], dim=1)
+        V = self.num_views
 
-        # Group views by their resolution
-        resolutions = [inp.shape[-1] for inp in x]
-        groups = [
-            list(group) for _, group in groupby(range(V), key=lambda i: resolutions[i])
+        ## ENCODING
+        results = [self._encode_resgroup(_x) for _x in x]
+        joint_cls, joint_patches, joint_pos, joint_ids_remove = [
+            torch.cat(group, dim=1) for group in zip(*results)
         ]
-
-        # Precompute per-view visible‐token counts and base offsets
-        N_vis_list = [self._get_N(res)[0] for res in resolutions]
-        view_base_offset = [0] + list(accumulate(N_vis_list[:-1]))
-
-        # Apply segment embeddings
-        seg_embed = self.segment_embed[:V]
-        if self.segment_embed_mode == "permute":
-            seg_embed = seg_embed[torch.randperm(V, device=device)]
-
-        # Encode each group via our helper, then unpack
-
-        results = [
-            self._encode_resgroup(
-                x, params, g, seg_embed, view_base_offset[g[0]], N_vis_list[g[0]]
-            )
-            for g in groups
-        ]
-        # torch.cuda.nvtx.range_push("forward: unpack results")
-        # Unpack grouped results and concatenate tensors
-        *tensor_groups, shapes_list = zip(*results)
-        joint_cls, joint_patches, joint_positions, joint_ids_remove, joint_params = [
-            torch.cat(group, dim=1) for group in tensor_groups
-        ]
+        # joint_ids_remove need to be offset:
+        # (index 0 of second view is 0 + number of patches in first view)
+        offset = (self.Ns.cumsum(0) - self.Ns).repeat_interleave(self.Ms)
+        joint_ids_remove = joint_ids_remove + offset
         z = torch.cat([joint_cls, joint_patches], dim=1)
-        # torch.cuda.nvtx.range_pop()
 
-        # torch.cuda.nvtx.range_push("forward: forward_decoder")
-        # Decode, drop masked tokens
+        ## DECODE
+
+        # joint_cls: [B, global_views + local_views, D]
+        # joint_patches: [B, global_views * vis_global_tokens + local_views * vis_local_tokens, D]
+        # PROJECTOR
+        proj_z = self.dino_head(z)
+        # TRANSFORMER DECODER
         z = self.forward_decoder(z)
-        # torch.cuda.nvtx.range_pop()
+        # POSE HEAD
+        z_nopos = _drop_pos(z[:, V:, :], joint_ids_remove)
+        pred_dT_nopos = self.pose_head(z_nopos)
+        ## LOSSES
 
-        # torch.cuda.nvtx.range_push("forward: pose head")
-        # pose head (without the cls tokens)
-        pred_dT = self.pose_head(z[:, V:, :], joint_ids_remove)
-        # torch.cuda.nvtx.range_pop()
+        # joint_cls: [B, V, D]
+        # SimDINO Loss assumes [V, B, D] instead of [B, V, D]
+        # teacher is just the cls of the global views
+        proj_cls = proj_z[:, :V].permute(1, 0, 2)
+        proj_patches = proj_z[:, V:]
+        gt_dT = self._compute_gt(joint_pos, params, self.Ns)
+        gt_dT_nopos = drop_pos_2d(gt_dT, joint_ids_remove)
+        patch_pos_nopos = _drop_pos(joint_pos, joint_ids_remove)
 
-        # compute loss
-        # torch.cuda.nvtx.range_push("forward: patch_pos_nopos")
-        patch_pos_nopos = _drop_pos(joint_positions, joint_ids_remove)
-        # torch.cuda.nvtx.range_pop()
-        # torch.cuda.nvtx.range_push("forward: compute gt_dT")
-        gt_dT = self._compute_gt(patch_pos_nopos, joint_params, shapes_list)
-        # torch.cuda.nvtx.range_pop()
-        # torch.cuda.nvtx.range_push("forward: compute mask")
-        if self.static_shapes:
-            mask = self.intra_mask.expand(B, -1, -1, 1)
-        else:
-            mask = self._create_mask(shapes_list, device).expand(B, -1, -1, 1)
-        # torch.cuda.nvtx.range_pop()
-        # torch.cuda.nvtx.range_push("forward: compute pose loss")
-        losses = self._pose_loss(pred_dT, gt_dT, mask)
-        # torch.cuda.nvtx.range_pop()
-        # ----------------
-        # torch.cuda.nvtx.range_push("forward: compute dino loss")
-        dino_loss_keys = ["loss_dino", "loss_dino_comp", "loss_dino_expa"]
-        if self.lambda_dino:
-            # joint_cls: [B, V, D]
-            # DINO Loss assumes [V, B, D] instead of [B, V, D]
-            student_z = self.dino_head(joint_cls.permute(1, 0, 2))
-            teacher_z = student_z[: len(groups[0])].detach()  # Just the global views
-            dino_losses = self.dino_loss(student_z, teacher_z)
-        else:
-            dino_losses = torch.zeros(
-                len(dino_loss_keys), device=device, dtype=torch.float32
-            )
-        losses.update(dict(zip(dino_loss_keys, dino_losses)))
-        # torch.cuda.nvtx.range_pop()
+        losses = self._pose_loss(pred_dT_nopos, gt_dT_nopos, self.Ms)
+        losses["loss_cinv"] = self._cinv_loss(proj_cls, proj_cls[: self._gV].detach())
+        losses["loss_ccr"] = self._ccr_loss(proj_cls)
+        losses["loss_psmooth"] = self._psmooth_loss(proj_patches, gt_dT)
+        losses["loss_pcr"] = self._pcr_loss(proj_patches)
+        losses["loss_cos"] = self._cosine_loss(pred_dT_nopos, gt_dT_nopos)
 
-        # Applying L_patch only on posmasked tokens
-        # TODO: replace these lines when on production.
-        # For now, we log L_patch even if lambda_patch=0
-        # patches_nopos = _drop_pos(joint_patches, joint_ids_remove)
-        # losses["loss_patch"] = self._patch_loss(patches_nopos, gt_dT)
-        # torch.cuda.nvtx.range_push("forward: compute patch loss")
-        losses["loss_patch"] = torch.zeros(1, device=device)
-        # torch.cuda.nvtx.range_pop()
-        # L_cos = self._cosine_loss(pred_dT, gt_dT) if self.lambda_cos > 0 else 0.0
-        # torch.cuda.nvtx.range_push("forward: cosine loss")
-        losses["loss_cos"] = self._cosine_loss(pred_dT, gt_dT)
-        # torch.cuda.nvtx.range_pop()
-
-        # torch.cuda.nvtx.range_push("forward: lambda pose")
-        loss = self.lambda_pose * losses["loss_pose"]
-        # torch.cuda.nvtx.range_pop()
-        # torch.cuda.nvtx.range_push("forward: lambda patch")
-        loss = loss + self.lambda_patch * losses["loss_patch"]
-        # torch.cuda.nvtx.range_pop()
-        # torch.cuda.nvtx.range_push("forward: lambda cos")
-        loss = loss + self.lambda_cos * losses["loss_cos"]
-        # torch.cuda.nvtx.range_pop()
-        # torch.cuda.nvtx.range_push("forward: lambda dino")
-        loss = loss + self.lambda_dino * losses["loss_dino"]
-        # torch.cuda.nvtx.range_pop()
-
+        loss = sum(self.lambdas[k] * losses[k] for k in self.lambdas)
         return {
             "patch_positions_nopos": patch_pos_nopos,
             "joint_ids_remove": joint_ids_remove,
-            "shapes": shapes_list,
-            "pred_dT": pred_dT,
-            "gt_dT": gt_dT,
+            "pred_dT": pred_dT_nopos,
+            "gt_dT": gt_dT_nopos,
             "loss": loss,
             **losses,
         }
@@ -757,7 +765,7 @@ PART_mae_vit_base_patch16 = (
 )
 
 if __name__ == "__main__":
-    from src.data.components.transforms.multi_crop_v3 import ParametrizedMultiCropV3
+    from src.data.components.transforms.multi_crop_v4 import ParametrizedMultiCropV4
     from PIL import Image
     import torch.utils._pytree as pytree
     from lightning import seed_everything
@@ -767,13 +775,11 @@ if __name__ == "__main__":
     V = gV + lV
 
     backbone = (
-        PART_mae_vit_base_patch16(
-            pos_mask_ratio=0.9, mask_ratio=0.9, lambda_dino=0.1, num_views=V
-        )
+        PART_mae_vit_base_patch16(pos_mask_ratio=0.9, mask_ratio=0.9, num_views=V)
         .cuda()
         .eval()
     )
-    t = ParametrizedMultiCropV3(n_global_crops=gV, n_local_crops=lV, distort_color=True)
+    t = ParametrizedMultiCropV4(n_global_crops=gV, n_local_crops=lV, distort_color=True)
     print(t.compute_max_scale_ratio_aug())  # <5.97
 
     class MockedDataset(torch.utils.data.Dataset):
@@ -791,7 +797,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         dataset = MockedDataset(t)
         seed_everything(42)
-        loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=2, shuffle=False)
         seed_everything(42)
         batch = next(iter(loader))
         seed_everything(42)

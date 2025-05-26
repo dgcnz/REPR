@@ -4,7 +4,7 @@ defaults:
   - /optimizer: adamw
   - override /data: imagenette
   - override /model: pretrain/partmae_v6/vit_b_16_224
-  - override /data/transform: multi_crop_v3
+  - override /data/transform: multi_crop_v4
   - override /callbacks:
     - common/checkpoint
     - common/metric_logger
@@ -52,12 +52,14 @@ model:
   criterion: l1
   alpha_s: 1.0
   num_views: ${eval:${data.transform.n_global_crops} + ${data.transform.n_local_crops}}
-  segment_embed_mode: none
   apply_tanh: false
-  lambda_pose:  0.9
-  lambda_dino: 0.1
-  lambda_cos:  0
-  lambda_patch: 0
+  lambda_pose:  1.0
+
+  lambda_psmooth:  0
+  lambda_pcr: 0
+
+  lambda_ccr: 0
+  lambda_cinv: 0
 
 scheduler:
   warmup_t: ??? 
