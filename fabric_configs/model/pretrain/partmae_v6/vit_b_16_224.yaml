@@ -37,6 +37,7 @@ sampler: stratified_jittered
 lambda_pose:  1.0
 
 lambda_psmooth:  0
+lambda_pstress:  0
 lambda_pcr: 0
 
 lambda_ccr: 0

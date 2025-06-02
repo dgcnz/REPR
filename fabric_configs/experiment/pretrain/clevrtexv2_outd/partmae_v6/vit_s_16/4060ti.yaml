@@ -5,14 +5,14 @@ defaults:
 compile: False
 
 trainer:
-  max_epochs: 200
+  max_epochs: 100
   accelerator: gpu
   # limit_train_batches: 128
-  accumulate_grad_batches: 1
+  accumulate_grad_batches: 8
 
 scheduler:
-  warmup_t: 780 # 10 * 78
-  t_initial: 15600 # 200 * 78
+  warmup_t: 780 # 5 * 156
+  t_initial: 15600 # 100 * 156
 
 train_dataloader:
   batch_size: 128

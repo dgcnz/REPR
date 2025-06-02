@@ -1,9 +1,8 @@
 # @package _global_
-
 defaults:
   - /scheduler: cosine
   - /optimizer: adamw
-  - override /data: clevrtexv2_outd
+  - override /data: imagenette
   - override /model: pretrain/partmae_v6/vit_b_16_224
   - override /data/transform: multi_crop_v4
   - override /callbacks:
@@ -12,7 +11,7 @@ defaults:
     - common/iter_timer
   - override /logger: wandb
 
-tags: ["pretrain", "clevrtexv2_outd", "partmae_v6", "vit_b_16"]
+tags: ["posttrain", "imagenette", "partmae_v6", "simdino", "vit_b_16"]
 
 seed: 12345
 float32_matmul_precision: "high"
@@ -20,14 +19,13 @@ cudnn_benchmark: True
 
 callbacks:
   checkpoint: 
-    every_n_epochs: 100 # basically don't save
+    every_n_epochs: 25
   metric_logger:
-    every_n_steps: 25
+    every_n_steps: 10
   iter_timer:
-    every_n_steps: 25
+    every_n_steps: 10
 
 data:
-  root: ??? # depends on snellius or local
   transform:
     distort_color: true
     n_global_crops: 2
@@ -47,7 +45,15 @@ trainer:
 # with gV=2, lV=10, this is effectively ~1.5e-4
 blr: 1e-4 
 
+total_images: 9469
+ckpt_mode: backbone
+ckpt_path: ???
+total_batch_size_per_gpu: ${eval:${total_batch_size} // ${trainer.devices}}
+steps_per_epoch: ${eval:${total_images} // ${total_batch_size}}
+accumulate_grad_batches: ${eval:${total_batch_size_per_gpu} // ${train_dataloader.batch_size}}
+
 model:
+  _target_: src.models.components.utils.partmae_v6_simdino.PARTMaskedAutoEncoderViTFromSimDINO
   mask_ratio: 0.75
   pos_mask_ratio: 0.75
   sampler: stratified_jittered
@@ -55,6 +61,8 @@ model:
   alpha_s: 1.0
   num_views: ${eval:${data.transform.n_global_crops} + ${data.transform.n_local_crops}}
   apply_tanh: false
+  pos_embed_mode: learn
+
   lambda_pose:  1.0
 
   lambda_psmooth:  0
@@ -79,10 +87,12 @@ train_dataloader:
   batch_size: ???
   num_workers: ???
   drop_last: true
+  shuffle: true
 
 metric_collection:
   _target_: src.models.components.metrics.partmae_v6.V6Metrics
   nan_strategy: disable
+
 
 compile_kwargs:
   fullgraph: True
@@ -94,5 +104,5 @@ compile_expr:
 
 logger:
   wandb:
-    project: "PART-pretrain"
-    group: "clevrtexv2_outd/partmae_v6/vit_b_16"
+    project: "PART-posttrain"
+    group: "imagenette/partmae_v6/simdino/vit_b_16"

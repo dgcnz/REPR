@@ -4,6 +4,8 @@ defaults:
 
 compile: False
 
+optimized_metric:
+
 trainer:
   max_epochs: 100
   accelerator: gpu

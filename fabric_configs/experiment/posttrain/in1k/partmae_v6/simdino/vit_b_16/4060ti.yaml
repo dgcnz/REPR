@@ -1,0 +1,29 @@
+# @package _global_
+defaults:
+  - posttrain/in1k/partmae_v6/simdino/vit_b_16/_base
+
+compile: False
+
+total_batch_size: 512
+ckpt_path: artifacts/vitb16_SimDINOv1_gpu8_bs64_ep100.pth 
+
+trainer:
+  max_epochs: 10
+  accelerator: gpu
+
+scheduler:
+  warmup_t: ${eval:5 * ${steps_per_epoch}} # 10 epochs
+  t_initial: ${eval:${trainer.max_epochs} * ${steps_per_epoch}} # 100 epochs
+
+train_dataloader:
+  batch_size: 64
+  num_workers: 8
+
+evals:
+  - name: hummingbird
+    fn:
+      _target_: src.experiments.engine_hummingbird.eval
+      cfg:
+        model: partmae_v6
+        data: voc-mini
+        model.pretrained_cfg_overlay.state_dict.state_dict.f: ${paths.output_dir}/last.ckpt

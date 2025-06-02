@@ -21,9 +21,9 @@ callbacks:
   checkpoint: 
     every_n_epochs: 25
   metric_logger:
-    every_n_steps: 1
+    every_n_steps: 10
   iter_timer:
-    every_n_steps: 1
+    every_n_steps: 10
 
 data:
   transform:
@@ -60,6 +60,8 @@ model:
 
   lambda_ccr: 0
   lambda_cinv: 0
+
+  cr_eps: 0.5
 
 scheduler:
   warmup_t: ??? 

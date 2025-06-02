@@ -1,0 +1,6 @@
+# @package callbacks
+checkpoint:
+  _target_: src.callbacks.common.step_checkpoint.StepModelCheckpoint
+  dirpath: ${paths.output_dir}
+  save_perm_every_n_steps: ???
+  save_temp_every_n_steps: ???

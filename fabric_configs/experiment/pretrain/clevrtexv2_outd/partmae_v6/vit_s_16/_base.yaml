@@ -5,7 +5,7 @@ defaults:
   - /optimizer: adamw
   - override /data: clevrtexv2_outd
   - override /model: pretrain/partmae_v6/vit_s_16_224
-  - override /data/transform: multi_crop_v3
+  - override /data/transform: multi_crop_v4
   - override /callbacks:
     - common/checkpoint
     - common/metric_logger
@@ -20,7 +20,7 @@ cudnn_benchmark: True
 
 callbacks:
   checkpoint: 
-    every_n_epochs: 200 # basically don't save
+    every_n_epochs: 100 # basically don't save
   metric_logger:
     every_n_steps: 25
   iter_timer:
@@ -63,6 +63,8 @@ model:
   lambda_ccr: 0
   lambda_cinv: 0
 
+  cr_eps: 0.5
+
 scheduler:
   warmup_t: ??? 
   t_initial: ??? # 800 epochs?
@@ -80,6 +82,7 @@ train_dataloader:
 
 metric_collection:
   _target_: src.models.components.metrics.partmae_v6.V6Metrics
+  nan_strategy: disable
 
 compile_kwargs:
   fullgraph: True
