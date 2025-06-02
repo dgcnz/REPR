@@ -1,0 +1,8 @@
+defaults:
+  - _self_
+  - model: untrained
+  - data: voc-mini
+
+# global overrides
+batch_size: 128
+device: cuda
