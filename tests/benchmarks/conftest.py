@@ -62,7 +62,9 @@ class DataFrame(object):
 
 
         table = [{k: data[k][i] for k in self.columns} for i in range(len(self))]
-        print(tabulate.tabulate(table, headers="keys", tablefmt="rounded_outline"))
+        # print(tabulate.tabulate(table, headers="keys", tablefmt="rounded_outline"))
+        print(tabulate.tabulate(table, headers="keys"))
+
 
 
 
@@ -113,6 +115,9 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
             df.sort_by(options["sort_by"], reverse=options["metric_optim"][options["sort_by"]] == "max")
         print(f"\n  \033[1m{group_name}\033[0m")
         df.print_table(column_order=options["metric_optim"], highlight_top_k=1)
+
+
+
         
 
         # runs_metrics_t = {

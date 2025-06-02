@@ -21,13 +21,10 @@ class PARTMaskedAutoEncoderViTFromSimDINO(PARTMaskedAutoEncoderViT):
             if k.startswith("backbone."):
                 state_dict[k.replace("backbone.", "")] = state_dict.pop(k)
 
-        # 4. reshape patch_embed.proj.weight
-        state_dict["patch_embed.proj.weight"] = state_dict[
-            "patch_embed.proj.weight"
-        ].reshape(state_dict["patch_embed.proj.weight"].shape[0], -1)
+
         miss, unex = super().load_state_dict(state_dict, strict=False)
 
-        # 5. check for missing and unexpected keys
+        # 6. check for missing and unexpected keys
         if self.dino_head is None:
             unex = [k for k in unex if not k.startswith("dino_head.")]
 
@@ -43,9 +40,22 @@ class PARTMaskedAutoEncoderViTFromSimDINO(PARTMaskedAutoEncoderViT):
             "pose_head.linear.weight",
             "_patch_loss.sigma",
             "intra_mask",
+            "pos_embed"
         ]
         other_miss = [
             k for k in miss if not any(k.startswith(p) for p in allowed_prefixes)
         ]
         assert len(other_miss) == 0, f"missing keys: {other_miss}"
         return miss, unex
+
+
+if __name__ == "__main__":
+    import torch
+
+    p = "artifacts/vitb16_SimDINOv1_gpu8_bs64_ep100.pth"
+    ckpt = torch.load(p)
+    model = PARTMaskedAutoEncoderViTFromSimDINO(pos_embed_mode='learn')
+    miss, unex = model.load_state_dict(ckpt, strict=True)
+    print(f"missing keys: {miss}")
+    print(f"unexpected keys: {unex}")
+    torch.save({"model": model.state_dict()}, "artifacts/partmae_v6_simdino_untrained.pth")

@@ -2719,6 +2719,17 @@ wheels = [
 ]
 
 [[package]]
+name = "open-hummingbird-eval"
+version = "1.0.0"
+source = { editable = "../open-hummingbird-eval" }
+dependencies = [
+    { name = "pip" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pip", specifier = ">=25.1.1" }]
+
+[[package]]
 name = "opencv-python"
 version = "4.11.0.86"
 source = { registry = "https://pypi.org/simple" }
@@ -2998,6 +3009,7 @@ dev = [
     { name = "ipykernel" },
     { name = "jupyter" },
     { name = "onnxscript" },
+    { name = "open-hummingbird-eval" },
     { name = "opencv-python" },
     { name = "pandas" },
     { name = "poethepoet" },
@@ -3048,6 +3060,7 @@ dev = [
     { name = "ipykernel", specifier = ">=7.0.0a1" },
     { name = "jupyter", specifier = ">=1.1.1" },
     { name = "onnxscript", specifier = ">=0.3.0.dev20250409" },
+    { name = "open-hummingbird-eval", editable = "../open-hummingbird-eval" },
     { name = "opencv-python", specifier = ">=4.11.0.86" },
     { name = "pandas", specifier = ">=2.2.3" },
     { name = "poethepoet", specifier = ">=0.34.0" },

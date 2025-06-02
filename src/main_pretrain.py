@@ -191,7 +191,7 @@ def train(
 
 
 @task_wrapper
-def main(cfg: DictConfig) -> None:
+def main_train(cfg: DictConfig) -> None:
     # Create output directory
     output_dir = Path(cfg.paths.output_dir)
     if not os.path.exists(output_dir):
@@ -238,13 +238,19 @@ def main(cfg: DictConfig) -> None:
             log.info("Closing wandb!")
             wandb.finish()
 
-    return dict(metric_collection.metrics), {
-        "fabric": fabric,
-        "model": model,
-        "optimizer": optimizer,
-        "scheduler": scheduler,
-        "train_dataloader": train_dataloader,
-    }
+    metrics = dict(metric_collection.metrics)
+
+    return metrics, {}
+
+def main_eval(cfg: DictConfig):
+    # run eval if specified
+    metrics = dict()
+    evals = cfg.get("evals", [])
+    for eval_cfg in evals:
+        log.info(f"Running eval: {eval_cfg.name}")
+        eval_metrics = hydra.utils.call(eval_cfg.fn)
+        metrics.update(eval_metrics)
+    return metrics
 
 
 @hydra.main(
@@ -256,7 +262,11 @@ def hydra_main(cfg: DictConfig) -> None:
     extras(cfg)
 
     # Train the model
-    metrics, _ = main(cfg)
+    metrics, _ = main_train(cfg)
+    torch.cuda.empty_cache()
+    eval_metrics = main_eval(cfg) 
+    print(f"Eval metrics: {eval_metrics}")
+    metrics.update(eval_metrics)
 
     return get_metric_value(
         metric_dict=metrics,

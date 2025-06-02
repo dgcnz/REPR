@@ -1,6 +1,6 @@
 import torch
 import pytest
-from models.components.utils.offgrid_pos_embed import (
+from models.components.utils.offgrid_pos_embed_var import (
     PosEmbedDynamicDiff,
     PosEmbedStaticDiff,
     PosEmbedDynamicSame,

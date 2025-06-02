@@ -180,3 +180,5 @@ outputs
 **/*.jpg
 output
 docs/papers/
+*.pkl
+multirun

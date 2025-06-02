@@ -28,9 +28,10 @@ class Runner(object):
         n_warmup: int = 0,
         n_runs: int = 2,
     ):
-        assert bool(args_gen) ^ bool(
-            args
-        ), "args_gen or args must be provided, but not both"
+        if bool(args_gen) and bool(args):
+            raise ValueError(
+                "Only one of args_gen or args can be provided, not both"
+            )
         # assert kwargs_gen or kwargs, "kwargs_gen or kwargs must be provided"
         # kwargs_gen and kwargs are optional, but not both can be provided
         assert not (

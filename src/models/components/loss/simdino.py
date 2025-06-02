@@ -5,7 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributed as dist
 import torch.distributed.nn as dist_nn
-
+from jaxtyping import Float
+from torch import Tensor
 
 class MCRLoss(nn.Module):
     def __init__(self, ncrops, reduce_cov=0, expa_type=0, eps=0.5, coeff=1.0):
@@ -16,7 +17,7 @@ class MCRLoss(nn.Module):
         self.reduce_cov = reduce_cov
         self.expa_type = expa_type
 
-    def forward(self, student_feat, teacher_feat):
+    def forward(self, student_feat: Float[Tensor, "gV+lV B D"], teacher_feat: Float[Tensor, "gV B D"]) -> Tensor:
         """
         Expansion Loss and Compression Loss between features of the teacher and student networks.
         """
@@ -54,7 +55,7 @@ class MCRLoss(nn.Module):
         # global_comp_loss = (sim[:, :len(teacher_feat_list)].mean(2).sum()).detach_().div_(len(teacher_feat_list))
         return comp_loss
 
-    def calc_expansion(self, feat_list) -> torch.Tensor:
+    def calc_expansion(self, feat_list: Float[Tensor, "gV B D"]) -> torch.Tensor:
         """
         Compute expansion loss using Coding Rate estimation.
         """
@@ -85,3 +86,35 @@ class MCRLoss(nn.Module):
         )  # the balancing factor gamma, you can also use the next line. This is ultimately a heuristic, so feel free to experiment.
         # loss *= ((self.eps * N * m) ** 0.5 / p)
         return loss
+
+
+if __name__ == "__main__":
+    # Example usage
+    B, V, D = 8, 2, 128
+    z = torch.randn(B, V, D)
+
+    feat_list = z.permute(1, 0, 2)
+    cov_list = []
+    num_views = len(feat_list)
+    m, p = feat_list[0].shape
+
+    cov_list = [W.T.matmul(W) for W in feat_list]
+    cov_list = torch.stack(cov_list)
+    N = 1
+    scalar = p / (m * N)
+    I = torch.eye(p, device=cov_list[0].device)
+    loss: torch.Tensor = 0
+    for i in range(num_views):
+        loss += (
+            torch.linalg.cholesky_ex(I + scalar * cov_list[i])[0]
+            .diagonal()
+            .log()
+            .sum()
+        )
+    loss /= num_views
+
+    from src.models.components.utils.spectral import batched_logdet
+    alpha = D / (B)
+    loss_bld = batched_logdet(I, feat_list, alpha, num_chunks=2)
+    print("Loss:", loss.item())
+    print("Loss:", loss_bld.item())

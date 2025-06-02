@@ -59,6 +59,7 @@ torchvision = { index = "pytorch-cu128" }
 
 parameterized-transforms = { git = "https://github.com/dgcnz/parameterized-transforms" }
 gradio-patch-selection = { git = "https://github.com/dgcnz/gradio_patch_selector.git" }
+open-hummingbird-eval = { path = "../open-hummingbird-eval", editable = true }
 
 [dependency-groups]
 dev = [
@@ -67,6 +68,7 @@ dev = [
     "ipykernel>=7.0.0a1",
     "jupyter>=1.1.1",
     "onnxscript>=0.3.0.dev20250409",
+    "open-hummingbird-eval",
     "opencv-python>=4.11.0.86",
     "pandas>=2.2.3",
     "poethepoet>=0.34.0",
@@ -91,19 +93,23 @@ testpaths = [
 
 [tool.poe.tasks]
 profile_pretrain = """
-  sudo nsys profile \
+    sudo nsys profile \
     -w true \
     -t cuda,nvtx,osrt,cudnn,cublas \
     -s cpu \
     --capture-range cudaProfilerApi \
     --capture-range-end stop \ 
     --cudabacktrace=true \
+    -f true \
     -x true \
     --gpu-metrics-devices all \
     --cuda-memory-usage true \
     --pytorch=autograd-nvtx \
     --python-sampling=true \
     --python-sampling-frequency=2000 \ 
-    -e WANDB_MODE=offline \
-    .venv/bin/python -m src.main_pretrain
+    -e WANDB_MODE=offline,TRANSFORM_LOG_LEVEL=DEBUG \
+    .venv/bin/python  \
+    /home/dgcnz/development/playground/nvtx-vscode/nvtx-manager/python_scripts/nvtx_runner.py  \
+    .vscode/nvtx_ranges.json  \
+    src/main_pretrain.py 
 """

@@ -6,7 +6,7 @@ from torch import Tensor
 
 
 def get_1d_sincos_pos_embed(
-    positions: Float[Tensor, "N"], embed_dim: int
+    positions: Float[Tensor, " N"], embed_dim: int
 ) -> torch.Tensor:
     assert embed_dim % 2 == 0, "Embedding dimension must be even."
     device = positions.device
@@ -67,6 +67,42 @@ def get_canonical_pos_embed(
     # pos_embed = pos_embed.view(*grid_size, embed_dim).permute(2, 0, 1).unsqueeze(0)
     pos_embed = pos_embed.unsqueeze(0)
     return pos_embed
+
+def get_sincos_pos_embed(
+    embed_dim: int,
+    grid_size: tuple = (14, 14),
+    patch_size: int = 16,
+    device: str = "cpu",
+) -> Float[torch.Tensor, "1 N+1 D"]:
+    """
+    Returns sin-cos positional embeddings of shape (1, embed_dim, H, W).
+    """
+    pos_embed = get_canonical_pos_embed(embed_dim, grid_size, patch_size, device)
+    cls_pos_embed = torch.zeros(1, 1, embed_dim, device=device)
+    return torch.cat([cls_pos_embed, pos_embed], dim=1)  # [1, N+1, D]
+
+
+def interpolate_grid_sample(
+    grid: torch.Tensor,   # [D, H, W]
+    coords: torch.Tensor  # [N, 2], (y, x) in pixel coords
+) -> torch.Tensor:       # returns [N, D]
+    """
+    Reference using torch.grid_sample with align_corners=True.
+    """
+    D, H, W = grid.shape
+    # prep as (1,C,H,W)
+    inp = grid.unsqueeze(0)  # [1, D, H, W]
+
+    # normalize coords to [-1,1]
+    y, x = coords.unbind(-1)
+    x = x.div(W - 1).mul(2).sub(1)
+    y = y.div(H - 1).mul(2).sub(1)
+    # grid_sample expects (N, out_H, out_W, 2)
+    samp = torch.stack([x, y], dim=-1).view(1, coords.size(0), 1, 2)
+    out = F.grid_sample(inp, samp, mode="bilinear", align_corners=True)
+    # out: [1, D, N, 1] → [N, D]
+    return out[0, :, :, 0].permute(1, 0)               # → [N, D]
+
 
 
 def interpolate_pos_embed(

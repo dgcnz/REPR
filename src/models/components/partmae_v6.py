@@ -1,7 +1,6 @@
 import torch
 import math
 from torch import nn, Tensor
-from torch.nn.functional import mse_loss, l1_loss
 from timm.models.vision_transformer import Block
 from functools import partial
 from src.models.components.utils.patch_embed import (
@@ -13,224 +12,22 @@ from src.models.components.utils.patch_embed import (
 )
 from src.models.components.utils.offgrid_pos_embed import (
     get_2d_sincos_pos_embed,
-    get_canonical_pos_embed,
+    interpolate_grid_sample,
+    get_sincos_pos_embed,
 )
 from torch.nn.modules.utils import _pair
 from jaxtyping import Int, Float
 from src.models.components.heads.dino_head import DINOHead
-import torch.nn.functional as F
+import logging
+from src.models.components.loss.match import PatchMatchingLoss
+from src.models.components.loss.pose import PoseLoss
+from src.models.components.loss.patch_coding_rate import PatchCodingRateLoss
+from src.models.components.loss.simdino_ref import CLSCodingRateLoss, CLSInvarianceLoss
+from src.models.components.loss.cos_align import CosineAlignmentLoss
+from src.models.components.loss.stress import PatchStressLoss
 
 
-class PoseLoss(nn.Module):
-    def __init__(
-        self,
-        criterion: str = "mse",
-        alpha_t: float = 0.5,
-        alpha_s: float = 0.75,
-        alpha_ts: float = 0.5,
-    ):
-        super().__init__()
-        self.criterion = mse_loss if criterion == "mse" else l1_loss
-        self.alpha_t = alpha_t
-        self.alpha_s = alpha_s
-        self.alpha_ts = alpha_ts
-
-    def forward(self, pred_dT: Tensor, gt_dT: Tensor, Ms: Tensor) -> Tensor:
-        device, B, V = pred_dT.device, pred_dT.shape[0], Ms.shape[0]
-
-        loss_full = self.criterion(pred_dT, gt_dT, reduction="none")
-
-        view_ids = torch.arange(V, device=device).repeat_interleave(Ms)
-        mask = (view_ids[None, :] == view_ids[:, None]).float()
-        mask = mask[None, ..., None].expand(B, -1, -1, 1)
-        diag, offdiag = mask.sum(), (1 - mask).sum()
-
-        loss_intra_t = (loss_full[..., :2] * mask).sum() / diag
-        loss_inter_t = (loss_full[..., :2] * (1 - mask)).sum() / offdiag
-        loss_intra_s = (loss_full[..., 2:] * mask).sum() / diag
-        loss_inter_s = (loss_full[..., 2:] * (1 - mask)).sum() / offdiag
-        loss_t = self.alpha_t * loss_inter_t + (1 - self.alpha_t) * loss_intra_t
-        loss_s = self.alpha_s * loss_inter_s + (1 - self.alpha_s) * loss_intra_s
-        loss = self.alpha_ts * loss_t + (1 - self.alpha_ts) * loss_s
-        return {
-            "loss_pose_intra_t": loss_intra_t,
-            "loss_pose_inter_t": loss_inter_t,
-            "loss_pose_intra_s": loss_intra_s,
-            "loss_pose_inter_s": loss_inter_s,
-            "loss_pose_t": loss_t,
-            "loss_pose_s": loss_s,
-            "loss_pose": loss,
-        }
-
-
-class PatchSmoothnessLoss(nn.Module):
-    """
-    Graph-Laplacian smoothness
-
-    params:
-        sigma_yx: bandwidth for spatial offsets (dy, dx)
-        sigma_hw: bandwidth for log‐scale offsets (dlogh, dlogw)
-    """
-
-    def __init__(
-        self,
-        sigma_yx: float = 0.09,
-        sigma_hw: float = 0.30,
-    ):
-        super().__init__()
-        # sigma² per‐dimension: [dy, dx, dlogh, dlogw]
-        self.register_buffer(
-            "sigma2",
-            torch.tensor(
-                [sigma_yx**2, sigma_yx**2, sigma_hw**2, sigma_hw**2],
-                dtype=torch.float32,
-            ),
-            persistent=False,
-        )
-
-    @staticmethod
-    def _laplacian_energy(z: Tensor, w: Tensor) -> Tensor:
-        """
-        Compute batch-wise tr(Zᵀ L Z) where L = D - W.
-        z: (B, T, D)
-        w: (B, T, T) positive affinity matrix
-        returns: (B,)
-        """
-        # degree d_i = ∑_j w_ij
-        d = w.sum(-1)  # (B, T)
-        # z² norms
-        z2 = (z * z).sum(-1)  # (B, T)
-        # ∑_j w_ij z_j
-        wz = torch.bmm(w, z)  # (B, T, D)
-
-        # tr(Zᵀ D Z) − 2 tr(Zᵀ W Z) + tr(Zᵀ W Z)
-        # = ∑_i d_i ‖z_i‖² − 2 ∑_i z_i·(∑_j w_ij z_j) + ∑_j d_j ‖z_j‖²
-        term1 = (z2 * d).sum(-1)
-        term2 = 2 * (wz * z).sum((-1, -2))
-        term3 = (z2.unsqueeze(1) * w).sum((-1, -2))
-        return term1 - term2 + term3
-
-    def forward(
-        self, z: Float[Tensor, "B T D"], gt_dT: Float[Tensor, "B T T 4"]
-    ) -> Float[Tensor, "1"]:
-        """
-        :param z:    L2-normalized patch embeddings
-        :param gt_dT: normalized [dy, dx, dlogh, dlogw]
-        """
-
-        # --- 1) Gaussian kernel w_ij ---
-        w = (gt_dT.pow(2) / (2 * self.sigma2)).sum(-1)  # (B, T, T)
-        w = torch.exp(-w)  # (B, T, T)
-
-        # --- 2) Laplacian smoothness term ---
-        num = self._laplacian_energy(z, w)  # (B,)
-        denom = w.sum((-1, -2)).clamp(min=1e-6)  # (B,)
-        lap = num / denom  # (B,)
-        return lap.mean()
-
-
-class PatchCodingRateLoss(nn.Module):
-    def __init__(self, embed_dim: int, eps: float = 0.5):
-        super().__init__()
-        self.eps = eps
-        self.register_buffer(
-            "I", torch.eye(embed_dim, dtype=torch.float32), persistent=False
-        )
-
-    def forward(self, z: Float[Tensor, "B T D"]) -> Float[Tensor, "1"]:
-        """
-        :param z: l2 normalized patch embeddings
-        """
-        _, T, D = z.shape
-
-        # 1) batched covariance: [B, D, T] @ [B, D, T] → [B, D, D]
-        cov = torch.bmm(z.transpose(1, 2), z)
-
-        # 2) form I + α·cov  (broadcasting I over the batch dim)
-        alpha = D / (T * self.eps)
-        cov = alpha * cov + self.I  # shape [B, D, D]
-
-        # 3) batch log determinant of I + α·cov
-        expa = (
-            torch.linalg.cholesky_ex(cov)[0]
-            .diagonal(dim1=-2, dim2=-1)
-            .log()
-            .sum(dim=1)
-            .mean()
-        )
-
-        # 4) final γ‐scaling
-        gamma = (D + T) / (D * T)
-        return expa * gamma
-
-
-class CLSCodingRateLoss(nn.Module):
-    # expansion loss for MCR
-    def __init__(self, embed_dim: int, eps: float, gV: int):
-        super().__init__()
-        self.eps = eps
-        self.gV = gV  # number of global views
-        self.register_buffer(
-            "I", torch.eye(embed_dim, dtype=torch.float32), persistent=False
-        )
-
-    def forward(self, z: Float[Tensor, "V B D"]) -> Tensor:
-        """
-        :param z: l2 normalized patch embeddings (student)
-        """
-        V, B, D = z.shape
-        z = z[: self.gV]  # only use global views for CLS coding rate loss
-        cov = torch.bmm(z.transpose(1, 2), z)  # [V, D, D]
-        scalar = D / (B * self.eps)
-        loss = (
-            torch.linalg.cholesky_ex(self.I + scalar * cov)[0]
-            .diagonal(dim1=-2, dim2=-1)
-            .log()
-            .sum(dim=1)
-            .mean()
-        )
-        loss *= (D + B) / (D * B)
-        # the balancing factor gamma, you can also use the next line. This is ultimately a heuristic, so feel free to experiment.
-        # loss *= ((self.eps *  B) ** 0.5 / D)
-        return loss
-
-
-class CLSInvarianceLoss(nn.Module):
-    # compression loss for MCR
-    def __init__(self):
-        super().__init__()
-
-    def forward(
-        self, z_stu: Float[Tensor, "V B D"], z_tea: Float[Tensor, "V B D"]
-    ) -> Tensor:
-        sim = F.cosine_similarity(z_tea.unsqueeze(1), z_stu.unsqueeze(0), dim=-1)
-        # Trick to fill diagonal
-        sim.view(-1, sim.shape[-1])[:: (len(z_stu) + 1), :].fill_(0)
-        n_loss_terms = len(z_tea) * len(z_stu) - min(len(z_tea), len(z_stu))
-        # Sum the cosine similarities
-        comp_loss = sim.mean(2).sum() / n_loss_terms
-        return -comp_loss  # negative because we want to maximize similarity
-
-
-class CosineAlignmentLoss(nn.Module):
-    def __init__(self, eps: float = 1e-8):
-        super().__init__()
-        self.eps = eps
-
-    def forward(self, pred_dT: Tensor, gt_dT: Tensor) -> Tensor:
-        # pred_dT, gt_dT: [B, T, T, C]
-        B, _, _, C = pred_dT.shape
-        # flatten the pair dims → [B, P, C], where P=T*T
-        pred = pred_dT.view(B, -1, C)
-        gt = gt_dT.view(B, -1, C)
-        # normalize each vector to unit length
-        pred_norm = pred / (pred.norm(dim=-1, keepdim=True) + self.eps)
-        gt_norm = gt / (gt.norm(dim=-1, keepdim=True) + self.eps)
-        # cosine similarity per pair
-        cos_sim = (pred_norm * gt_norm).sum(dim=-1)  # [B, P]
-        # loss = 1 − cos_sim, then mean over all pairs and batch
-        # this is the same as -cos_sim but easier to interpret
-        return (1 - cos_sim).mean()
+logging.basicConfig(level=logging.INFO)
 
 
 class PoseHead(nn.Module):
@@ -241,9 +38,9 @@ class PoseHead(nn.Module):
 
     def forward(self, z):
         pose_pred = self.linear(z)
-        pose_u = pose_pred.unsqueeze(2)
-        pose_v = pose_pred.unsqueeze(1)
-        pred_dT = self.tanh(pose_u - pose_v)
+        # or equivalently:
+        # w * (z_i -  z_j) = pose_ij
+        pred_dT = self.tanh(pose_pred.unsqueeze(2) - pose_pred.unsqueeze(1))
         return pred_dT
 
 
@@ -294,11 +91,13 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         sampler: str = "random",
         num_views: int = 12,  # default is 2 global 10 local
         freeze_encoder: bool = False,
-        apply_tanh: bool = True,
+        apply_tanh: bool = False,
         # losses
         lambda_pose: float = 0.6,
         # patch losses
         lambda_psmooth: float = 0.0,
+        lambda_pstress: float = 0.0,  # stress loss
+        lambda_pmatch: float = 0.0,  # patch matching loss
         lambda_pcr: float = 0.0,
         # class losses
         lambda_ccr: float = 0.0,  # match them (ccr = cinv)
@@ -313,11 +112,16 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # patch loss
         sigma_yx: float = 0.09,
         sigma_hw: float = 0.30,
+        beta_f: float = 0.1,  # for patch matching loss
+        beta_w: float = 1.0,  # for patch matching loss
         cr_eps: float = 0.5,
         # cosine alignment loss
         cos_eps: float = 1e-8,
         # dino loss
         proj_bottleneck_dim: int = 256,
+        num_register_tokens: int = 0,
+        ls_init_values: float = 0.0,  # 1e-5 for dinov2
+        pos_embed_mode: str = "sincos",  # "sincos" or "learn"
         # ..
     ):
         """ """
@@ -326,10 +130,17 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.img_size = img_size
         self.local_img_size = local_img_size
         self.canonical_img_size = canonical_img_size
+        self.in_chans = in_chans
         self.patch_size = patch_size
         self.mask_ratio = mask_ratio
         self.pos_mask_ratio = pos_mask_ratio
         self.max_scale_ratio = max_scale_ratio
+        self.num_register_tokens = num_register_tokens
+        # cls token + register tokens
+        self.num_prefix_tokens = 1 + num_register_tokens
+        self.pos_embed_mode = pos_embed_mode
+        self.grid_size = _pair(self.img_size // self.patch_size)
+        assert pos_embed_mode in ("sincos", "learn")
 
         self.patch_embed = OffGridPatchEmbed(
             patch_size=patch_size,
@@ -340,9 +151,19 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         )
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        num_patches = (img_size // patch_size) ** 2
+        self.register_tokens = (
+            nn.Parameter(torch.zeros(1, num_register_tokens, embed_dim))
+            if num_register_tokens
+            else None
+        )
+
+        # 2d grid only for interpolation, override in state_dict
         self.pos_embed = nn.Parameter(
-            torch.zeros(1, num_patches + 1, embed_dim), requires_grad=False
+            torch.zeros(embed_dim, *self.grid_size),
+            requires_grad=pos_embed_mode == "learn",
+        )
+        self.cls_pos_embed = nn.Parameter(
+            torch.zeros(1, 1, embed_dim), requires_grad=pos_embed_mode == "learn"
         )
         self.mask_pos_token = nn.Parameter(
             torch.zeros(1, 1, embed_dim), requires_grad=True
@@ -356,6 +177,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
                     mlp_ratio,
                     qkv_bias=True,
                     norm_layer=norm_layer,
+                    init_values=ls_init_values,
                 )
                 for _ in range(depth)
             ]
@@ -376,6 +198,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             ]
         )
         self.num_targets = 4
+        self.num_views = num_views
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.pose_head = PoseHead(
             embed_dim=decoder_embed_dim,
@@ -389,11 +212,14 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             hidden_dim=2048,
             bottleneck_dim=proj_bottleneck_dim,
         )
+        self._cache_shapes()
 
         # SimDINO losses
+        NUM_CHUNKS = 4
         self._ccr_loss = CLSCodingRateLoss(
             embed_dim=proj_bottleneck_dim,
             eps=cr_eps,
+            num_chunks=1,  # for stability
             gV=2,  # global views
         )
         self._cinv_loss = CLSInvarianceLoss()
@@ -405,34 +231,142 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             alpha_s=alpha_s,
             alpha_ts=alpha_ts,
         )
-        self._psmooth_loss = PatchSmoothnessLoss(sigma_yx=sigma_yx, sigma_hw=sigma_hw)
-        self._pcr_loss = PatchCodingRateLoss(embed_dim=proj_bottleneck_dim, eps=cr_eps)
+        # self._psmooth_loss = PatchSmoothnessLoss(sigma_yx=sigma_yx, sigma_hw=sigma_hw)
+        self._pmatch_loss = PatchMatchingLoss(
+            beta_f=beta_f,
+            beta_w=beta_w,
+            sigma_yx=sigma_yx,
+            sigma_hw=sigma_hw,
+            gN=self._gN,
+        )
+        self._pstress_loss = PatchStressLoss()
+        self._pcr_loss = PatchCodingRateLoss(
+            embed_dim=proj_bottleneck_dim,
+            eps=cr_eps,
+            num_chunks=NUM_CHUNKS,  # for stability
+        )
         self._cosine_loss = CosineAlignmentLoss(eps=cos_eps)
 
         self.lambdas = {
-            "loss_pose": lambda_pose,
-            "loss_psmooth": lambda_psmooth,
-            "loss_pcr": lambda_pcr,
-            "loss_ccr": lambda_ccr,
-            "loss_cinv": lambda_cinv,
+            # "loss_psmooth": lambda_psmooth, # comp
+            # "loss_pstress": lambda_pstress,
+            "loss_pmatch": lambda_pmatch,  # comp
+            "loss_pcr": lambda_pcr,  # exp
+            "loss_cinv": lambda_cinv,  # comp
+            "loss_ccr": lambda_ccr,  # exp
             "loss_cos": lambda_cos,
         }
+        if lambda_pose > 0:
+            self.lambdas["loss_pose"] = lambda_pose
+        # It's important to ensure that expansion and compression losses are complementary
+        # otherwise representational collapse can happen
+        # assert lambda_psmooth == lambda_pcr
+        assert not lambda_psmooth
 
-        self.num_views = num_views
+        assert lambda_ccr == lambda_cinv
+
         self.initialize_weights()
         if freeze_encoder:
             self.freeze_encoder()
 
-        self._cache_shapes()
+    def initialize_weights(self):
+        r"""
+        Initialize positional embeddings, cls token, mask token, and other weights.
+        """
+        if self.pos_embed_mode == "sincos":
+            pe = get_sincos_pos_embed(
+                self.embed_dim,
+                self.grid_size,
+                self.patch_size,
+                device=self.pos_embed.device,
+            )  # [1, N+1, D]
+            self.cls_pos_embed.data = pe[:, :1, :]
+            self.pos_embed.data = (
+                pe[:, 1:, :].squeeze(0).permute(1, 0).unflatten(-1, self.grid_size)
+            )
+        else:
+            nn.init.trunc_normal_(self.pos_embed, std=0.02)
+            nn.init.trunc_normal_(self.cls_pos_embed, std=0.02)
+        nn.init.normal_(self.mask_pos_token, std=1e-6)
+        nn.init.normal_(self.cls_token, std=1e-6)
+        if self.register_tokens is not None:
+            nn.init.normal_(self.register_tokens, std=1e-6)
+        self.apply(self._init_weights)
+        # TODO: should i really initialize pose_head.linear?
+        # nn.init.kaiming_uniform_(self.pose_head.linear.weight, a=4)
+
+    def _init_weights(self, m):
+        """
+        ViT weight initialization, original timm impl (for reproducibility)
+        """
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+
+    def state_dict(self, *args, **kwargs):
+        r"""
+        1. Override state_dict to ensure pos_embed is compatible with timm's ViT
+        2. reshape linear patch embeds to conv2d patchembeds
+        """
+        state_dict = super().state_dict(*args, **kwargs)
+        state_dict["pos_embed"] = torch.cat(
+            [
+                state_dict.pop("cls_pos_embed"),
+                state_dict.pop("pos_embed").flatten(-2, -1).permute(1, 0).unsqueeze(0),
+            ],
+            dim=1,
+        )
+        state_dict["patch_embed.proj.weight"] = state_dict[
+            "patch_embed.proj.weight"
+        ].reshape(self.embed_dim, self.in_chans, self.patch_size, self.patch_size)
+        return state_dict
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        """Override load_state_dict to ensure timm's pos_embed is loaded to 2d grid"""
+        if "pos_embed" in state_dict:
+            pos_embed = state_dict.pop("pos_embed")
+            # separate cls token and pos embed
+            assert pos_embed.shape[1] == self.grid_size[0] * self.grid_size[1] + 1
+
+            if self.pos_embed_mode == "sincos":
+                logging.warning(
+                    "Using fixed-sincos positional embeddings, ignoring checkpoints pos_embed."
+                )
+                pe = get_sincos_pos_embed(
+                    self.embed_dim,
+                    self.grid_size,
+                    self.patch_size,
+                    device=self.pos_embed.device,
+                )  # [1, N+1, D]
+                state_dict["cls_pos_embed"] = pe[:, :1, :]
+                state_dict["pos_embed"] = (
+                    pe[:, 1:, :].squeeze(0).permute(1, 0).unflatten(-1, self.grid_size)
+                )
+            else:  # learn
+                state_dict["cls_pos_embed"] = pos_embed[:, :1, :]
+                state_dict["pos_embed"] = (
+                    pos_embed[:, 1:, :]
+                    .squeeze(0)
+                    .permute(1, 0)
+                    .unflatten(1, self.grid_size)
+                )
+        if "patch_embed.proj.weight" in state_dict:
+            state_dict["patch_embed.proj.weight"] = state_dict[
+                "patch_embed.proj.weight"
+            ].flatten(1, 3)
+        return super().load_state_dict(state_dict, strict, assign)
 
     def _cache_shapes(self):
         (gN, gM), gV = self._get_N(self.img_size), 2
         (lN, lM), lV = self._get_N(self.local_img_size), self.num_views - 2
         Ns = [gN] * gV + [lN] * lV
         Ms = [gM] * gV + [lM] * lV
+        N = gN * gV + lN * lV
+        M = gM * gV + lM * lV
         Is = [self.img_size] * gV + [self.local_img_size] * lV
-        keys = ["gN", "gM", "gV", "lN", "lM", "lV", "Ns", "Ms", "Is"]
-        values = [gN, gM, gV, lN, lM, lV, Ns, Ms, Is]
+        keys = ["gN", "gM", "gV", "lN", "lM", "lV", "Ns", "Ms", "Is", "N", "M"]
+        values = [gN, gM, gV, lN, lM, lV, Ns, Ms, Is, N, M]
         for k, v in zip(keys, values):
             # have cpu/int and cuda tensors
             self._register_or_overwrite_buffer(k, v)
@@ -505,50 +439,27 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             if gV_actual != self._gV or lV_actual != self._lV:
                 self._cache_shapes()
 
-    def initialize_weights(self):
-        r"""
-        Initialize positional embeddings, cls token, mask token, and other weights.
-        """
-        grid_size = _pair(self.img_size // self.patch_size)
-        pos_embed = get_canonical_pos_embed(
-            self.embed_dim, grid_size, self.patch_size, device=self.pos_embed.device
-        )
-        cls_pos_embed = torch.zeros(1, 1, self.embed_dim)
-        self.pos_embed.data = torch.cat([cls_pos_embed, pos_embed], dim=1)
-        nn.init.normal_(self.cls_token, std=0.02)
-        nn.init.normal_(self.mask_pos_token, std=0.02)
-        self.apply(self._init_weights)
-        nn.init.kaiming_uniform_(self.pose_head.linear.weight, a=4)
-
-    def _init_weights(self, m):
-        r"""
-        Initialize weights for linear and norm layers.
-        """
-        if isinstance(m, nn.Linear):
-            nn.init.xavier_uniform_(m.weight)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-
     def prepare_tokens(self, x: Tensor):
         # 1. (Off-grid) Patch (sub-)sampling and embedding
         x, patch_positions_vis = self.patch_embed(x)
         # 2. Mask Position Embeddings
         B_total, N_vis, D = x.shape
-        ids_keep, _, ids_restore, ids_remove = self.random_masking(
-            x, self.pos_mask_ratio
-        )
+        ids_keep, ids_restore, ids_remove = self.random_masking(x, self.pos_mask_ratio)
         N_pos = ids_keep.shape[1]
         N_nopos = N_vis - N_pos
         patch_positions_pos = torch.gather(
             patch_positions_vis, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, 2)
         )
         # 3. Apply Position Embeddings
-        pos_embed = get_2d_sincos_pos_embed(
-            patch_positions_pos.flatten(0, 1) / self.patch_size, self.embed_dim
-        )
+        if self.pos_embed_mode == "sincos":
+            pos_embed = get_2d_sincos_pos_embed(
+                patch_positions_pos.flatten(0, 1) / self.patch_size, self.embed_dim
+            )
+        else:
+            pos_embed = interpolate_grid_sample(
+                self.pos_embed, patch_positions_pos.flatten(0, 1) / self.patch_size
+            )
+
         pos_embed = pos_embed.unflatten(0, (B_total, N_pos))
         mask_pos_tokens = self.mask_pos_token.expand(B_total, N_nopos, -1)
         pos_embed = torch.cat([pos_embed, mask_pos_tokens], dim=1)
@@ -557,9 +468,15 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         )
         x = x + pos_embed
         # 4. Class Token
-        cls_token = self.cls_token + self.pos_embed[:, :1, :]
-        cls_tokens = cls_token.expand(x.shape[0], -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)
+        to_cat = [
+            (self.cls_token + self.cls_pos_embed).expand(x.shape[0], -1, -1),
+        ]
+
+        # 5. Register Tokens
+        if self.register_tokens is not None:
+            to_cat.append(self.register_tokens.expand(x.shape[0], -1, -1))
+
+        x = torch.cat(to_cat + [x], dim=1)
         return x, patch_positions_vis, ids_remove
 
     def forward_encoder(self, x: Tensor) -> dict:
@@ -567,7 +484,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         Encode an image crop.
 
         :param x: Tensor of shape [B*n_views, C, H, W]
-        :return: Dict with:
+        :return: tuple with
                  "z_enc": Tensor of shape [B*n_views, 1+N_vis, D] (1 class token + N_vis visible tokens),
                  "patch_positions_vis": Tensor of shape [B*n_views, N_vis, 2],
                  "ids_remove_pos": Tensor of shape [B*n_views, M] (M indices of masked tokens)
@@ -599,7 +516,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         :param mask_ratio: Fraction of tokens to mask.
         :return: Tuple (ids_keep, mask, ids_restore, ids_remove) where:
                  ids_keep: Tensor of shape [B, N*(1-mask_ratio)]
-                 mask: Tensor of shape [B, N] (boolean)
                  ids_restore: Tensor of shape [B, N]
                  ids_remove: Tensor of shape [B, N*mask_ratio]
         """
@@ -610,10 +526,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         ids_restore = torch.argsort(ids_shuffle, dim=1)
         ids_keep = ids_shuffle[:, :len_keep]
         ids_remove = ids_shuffle[:, len_keep:]
-        mask = torch.ones([B, N], device=x.device)
-        mask[:, :len_keep] = 0
-        mask = torch.gather(mask, dim=1, index=ids_restore).bool()
-        return ids_keep, mask, ids_restore, ids_remove
+        return ids_keep, ids_restore, ids_remove
 
     def _compute_gt(
         self,
@@ -629,8 +542,11 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         :param shapes: list of tuples (crop_size, M, V)
         :return: Tensor of shape [B, T, T, 4] (pairwise differences)
         """
-        params = params.repeat_interleave(token_sizes, dim=1)
-        crop_sizes = self.Is.float().repeat_interleave(token_sizes)[None, :, None]
+        N = patch_pos_nopos.shape[1]
+        params = params.repeat_interleave(token_sizes, dim=1, output_size=N)
+        crop_sizes = self.Is.float().repeat_interleave(token_sizes, output_size=N)[
+            None, :, None
+        ]
 
         # Extract crop parameters: [x,y] offsets and [width,height]
         offset = params[..., :2]  # Top-left corner coordinates
@@ -675,11 +591,27 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         N_vis, N_nopos = patch_positions_vis.shape[-2], ids_remove_pos.shape[-1]
 
         return (
-            z[:, 0].reshape(B, V, -1),  # cls token # [B, V, D]
-            z[:, 1:].reshape(B, V * N_vis, -1),  # patches # [B, V * N_vis, D]
+            # cls token # [B, V, D]
+            z[:, 0].reshape(B, V, -1),
+            # drop the register tokens if any
+            # patches # [B, V * N_vis, D]
+            z[:, self.num_prefix_tokens :].reshape(B, V * N_vis, -1),
             patch_positions_vis.reshape(B, V * N_vis, -1),  # positions #
             ids_remove_pos.reshape(B, V * N_nopos),  # ids_remove
         )
+
+    def forward_pose_loss(self, z, gt_dT, joint_ids_remove):
+        if not self.lambdas.get("loss_pose", 0):
+            return {}
+        z = self.forward_decoder(z)
+        z_nopos = _drop_pos(z[:, V:, :], joint_ids_remove)
+        pred_dT_nopos = self.pose_head(z_nopos)
+        gt_dT_nopos = drop_pos_2d(gt_dT, joint_ids_remove)  # check
+        return {
+            **self._pose_loss(pred_dT_nopos, gt_dT_nopos, self._Ms),
+            "pred_dT": pred_dT_nopos,
+            "gt_dT": gt_dT_nopos,
+        }
 
     def forward(
         self,
@@ -693,15 +625,17 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         V = self.num_views
 
         ## ENCODING
-        results = [self._encode_resgroup(_x) for _x in x]
         joint_cls, joint_patches, joint_pos, joint_ids_remove = [
-            torch.cat(group, dim=1) for group in zip(*results)
+            torch.cat(group, dim=1)
+            for group in zip(*[self._encode_resgroup(_x) for _x in x])
         ]
+        z = torch.cat([joint_cls, joint_patches], dim=1)
+        del joint_cls, joint_patches, x
         # joint_ids_remove need to be offset:
         # (index 0 of second view is 0 + number of patches in first view)
-        offset = (self.Ns.cumsum(0) - self.Ns).repeat_interleave(self.Ms)
-        joint_ids_remove = joint_ids_remove + offset
-        z = torch.cat([joint_cls, joint_patches], dim=1)
+        M = joint_ids_remove.shape[1]
+        offset = (self.Ns.cumsum(0) - self.Ns).repeat_interleave(self.Ms, output_size=M)
+        joint_ids_remove = joint_ids_remove + offset  # correct :)
 
         ## DECODE
 
@@ -709,35 +643,30 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # joint_patches: [B, global_views * vis_global_tokens + local_views * vis_local_tokens, D]
         # PROJECTOR
         proj_z = self.dino_head(z)
-        # TRANSFORMER DECODER
-        z = self.forward_decoder(z)
-        # POSE HEAD
-        z_nopos = _drop_pos(z[:, V:, :], joint_ids_remove)
-        pred_dT_nopos = self.pose_head(z_nopos)
-        ## LOSSES
-
-        # joint_cls: [B, V, D]
-        # SimDINO Loss assumes [V, B, D] instead of [B, V, D]
-        # teacher is just the cls of the global views
-        proj_cls = proj_z[:, :V].permute(1, 0, 2)
+        proj_cls = proj_z[:, :V]
         proj_patches = proj_z[:, V:]
         gt_dT = self._compute_gt(joint_pos, params, self.Ns)
-        gt_dT_nopos = drop_pos_2d(gt_dT, joint_ids_remove)
         patch_pos_nopos = _drop_pos(joint_pos, joint_ids_remove)
-
-        losses = self._pose_loss(pred_dT_nopos, gt_dT_nopos, self.Ms)
-        losses["loss_cinv"] = self._cinv_loss(proj_cls, proj_cls[: self._gV].detach())
+        # TRANSFORMER DECODER
+        losses = self.forward_pose_loss(z, gt_dT, joint_ids_remove)
+        # joint_cls: [B, V, D]
+        # teacher is just the cls of the global views
+        losses["loss_cinv"] = self._cinv_loss(
+            proj_cls, proj_cls[:, : self._gV].detach()
+        )
         losses["loss_ccr"] = self._ccr_loss(proj_cls)
-        losses["loss_psmooth"] = self._psmooth_loss(proj_patches, gt_dT)
+        # losses["loss_psmooth"] = self._psmooth_loss(proj_patches, gt_dT)
+        # losses["loss_pstress"] = self._pstress_loss(proj_patches, gt_dT)
+        losses["loss_pmatch"] = self._pmatch_loss(proj_patches, gt_dT)
         losses["loss_pcr"] = self._pcr_loss(proj_patches)
-        losses["loss_cos"] = self._cosine_loss(pred_dT_nopos, gt_dT_nopos)
+        # losses["loss_cos"] = self._cosine_loss(pred_dT_nopos, gt_dT_nopos)
 
-        loss = sum(self.lambdas[k] * losses[k] for k in self.lambdas)
+        loss = torch.stack(
+            [self.lambdas[k] * losses[k] for k in self.lambdas if k in losses]
+        ).sum()
         return {
             "patch_positions_nopos": patch_pos_nopos,
             "joint_ids_remove": joint_ids_remove,
-            "pred_dT": pred_dT_nopos,
-            "gt_dT": gt_dT_nopos,
             "loss": loss,
             **losses,
         }
@@ -771,11 +700,13 @@ if __name__ == "__main__":
     from lightning import seed_everything
 
     seed_everything(42)
-    gV, lV = 2, 3
+    gV, lV = 2, 10
     V = gV + lV
 
     backbone = (
-        PART_mae_vit_base_patch16(pos_mask_ratio=0.9, mask_ratio=0.9, num_views=V)
+        PART_mae_vit_base_patch16(
+            pos_mask_ratio=0.75, mask_ratio=0.75, num_views=V, pos_embed_mode="sincos"
+        )
         .cuda()
         .eval()
     )
@@ -794,10 +725,10 @@ if __name__ == "__main__":
         def __len__(self):
             return self.n
 
-    with torch.no_grad():
+    with torch.no_grad(), torch.amp.autocast("cuda", dtype=torch.bfloat16):
         dataset = MockedDataset(t)
         seed_everything(42)
-        loader = torch.utils.data.DataLoader(dataset, batch_size=2, shuffle=False)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=False)
         seed_everything(42)
         batch = next(iter(loader))
         seed_everything(42)
@@ -808,3 +739,8 @@ if __name__ == "__main__":
         seed_everything(42)
         out = backbone(*batch)
         print("Output keys:", out.keys())
+
+    # print(out["loss_pose"])
+    sd = backbone.state_dict()
+    backbone.load_state_dict(sd, strict=True)
+    print(backbone.blocks[0].attn.fused_attn)

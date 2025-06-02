@@ -27,9 +27,11 @@ class V6Metrics(WrapperMetric):
                 "loss_pose_t": MeanMetric(**mean_kwargs),
                 "loss_pose_s": MeanMetric(**mean_kwargs),
                 "loss_pose": MeanMetric(**mean_kwargs),
-                "loss_psmooth": MeanMetric(**mean_kwargs),
+                # "loss_psmooth": MeanMetric(**mean_kwargs),
+                # "loss_pstress": MeanMetric(**mean_kwargs),
+                "loss_pmatch": MeanMetric(**mean_kwargs),
                 "loss_pcr": MeanMetric(**mean_kwargs),
-                "loss_cos": MeanMetric(**mean_kwargs),
+                # "loss_cos": MeanMetric(**mean_kwargs),
                 "loss_ccr": MeanMetric(**mean_kwargs),
                 "loss_cinv": MeanMetric(**mean_kwargs),
                 "loss": MeanMetric(**mean_kwargs),
@@ -56,19 +58,20 @@ class V6Metrics(WrapperMetric):
                    it overrides the model set during initialization.
         """
         for k in self.metrics:
-            if k.startswith("loss"):
+            if k.startswith("loss") and k in outputs:
                 self.metrics[k].update(outputs[k])
 
-        self.metrics["pred_dt_std"].update(outputs["pred_dT"][..., :2].std())
-        self.metrics["pred_ds_std"].update(outputs["pred_dT"][..., 2:].std())
-        self.metrics["gt_dt_std"].update(outputs["gt_dT"][..., :2].std())
-        self.metrics["gt_ds_std"].update(outputs["gt_dT"][..., 2:].std())
-        self.metrics["rmse_pred_dt"].update(
-            outputs["pred_dT"][..., :2].flatten(), outputs["gt_dT"][..., :2].flatten()
-        )
-        self.metrics["rmse_pred_ds"].update(
-            outputs["pred_dT"][..., 2:].flatten(), outputs["gt_dT"][..., 2:].flatten()
-        )
+        if "pred_dT" in outputs and "gt_dT" in outputs:
+            self.metrics["pred_dt_std"].update(outputs["pred_dT"][..., :2].std())
+            self.metrics["pred_ds_std"].update(outputs["pred_dT"][..., 2:].std())
+            self.metrics["gt_dt_std"].update(outputs["gt_dT"][..., :2].std())
+            self.metrics["gt_ds_std"].update(outputs["gt_dT"][..., 2:].std())
+            self.metrics["rmse_pred_dt"].update(
+                outputs["pred_dT"][..., :2].flatten(), outputs["gt_dT"][..., :2].flatten()
+            )
+            self.metrics["rmse_pred_ds"].update(
+                outputs["pred_dT"][..., 2:].flatten(), outputs["gt_dT"][..., 2:].flatten()
+            )
 
         if "grad_norm" in outputs:
             self.metrics["grad_mean_norm"].update(outputs["grad_norm"].mean())
