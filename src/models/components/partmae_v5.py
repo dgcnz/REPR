@@ -59,7 +59,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # TODO: remove after 200ep training of old model
         segment_embed_mode: Literal["permute", "none", "fixed"] = "none",
         freeze_encoder: bool = False,
-        apply_tanh: bool = True,
+        apply_tanh: bool = False,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -620,9 +620,9 @@ if __name__ == "__main__":
     from lightning import seed_everything
 
     seed_everything(42)
-    backbone = PART_mae_vit_base_patch16(pos_mask_ratio=0.75, mask_ratio=0.75).cuda()
-    gV, lV = 2, 4
+    gV, lV = 2, 10
     V = gV + lV
+    backbone = PART_mae_vit_base_patch16(pos_mask_ratio=0.75, mask_ratio=0.75, num_views=V).cuda()
     t = ParametrizedMultiCropV2(n_global_crops=gV, n_local_crops=lV, distort_color=True)
     print(t.compute_max_scale_ratio_aug())  # <5.97
 
