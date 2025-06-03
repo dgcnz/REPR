@@ -1,13 +1,11 @@
-import math
 
 def preprocess(state_dict):
     # Reshape patch embedding weights
     state_dict = state_dict["model"]
-    print(state_dict["patch_embed.proj.weight"].shape)
-    print(state_dict["pos_embed"].shape)
     if "register_tokens" in state_dict:
-        # force convert_dinov2
-        state_dict["mask_token"] = state_dict["mask_pos_token"]
+        # this triggers the convert_dinov2 in timm's loading checkpoint
+        # which is needed for correctly parsing the positional embeddings
+        state_dict["mask_token"] = state_dict["mask_pos_token"] 
 
     # Filter out decoder parts
     state_dict = {k: v for k, v in state_dict.items() if not k.startswith("decoder_")}

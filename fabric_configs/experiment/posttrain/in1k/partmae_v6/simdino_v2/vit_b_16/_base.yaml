@@ -71,7 +71,7 @@ model:
   lambda_pstress:  0
   lambda_psmooth: 0
   lambda_pmatch: 0.05
-  lambda_pcr: 0.04
+  lambda_pcr: 0.03
 
   lambda_ccr: 0.05
   lambda_cinv: 0.05

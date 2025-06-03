@@ -7,7 +7,9 @@ compile: False
 total_batch_size: 512
 ckpt_path: artifacts/vitb16_reg4_SimDNIOv2_ep100.pth
 
-blr: 5e-6
+# blr: 5e-6
+blr: 1e-5
+
 trainer:
   max_epochs: 5
   accelerator: gpu

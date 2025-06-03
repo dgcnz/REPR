@@ -21,7 +21,7 @@ from src.models.components.heads.dino_head import DINOHead
 import logging
 from src.models.components.loss.match import PatchMatchingLoss
 from src.models.components.loss.pose import PoseLoss
-from src.models.components.loss.patch_coding_rate import PatchCodingRateLoss
+from src.models.components.loss.patch_coding_rate import PatchCodingRateLoss, PatchCodingRateLossV2
 from src.models.components.loss.simdino_ref import CLSCodingRateLoss, CLSInvarianceLoss
 from src.models.components.loss.cos_align import CosineAlignmentLoss
 from src.models.components.loss.stress import PatchStressLoss
@@ -215,7 +215,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self._cache_shapes()
 
         # SimDINO losses
-        NUM_CHUNKS = 4
         self._ccr_loss = CLSCodingRateLoss(
             embed_dim=proj_bottleneck_dim,
             eps=cr_eps,
@@ -240,10 +239,14 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             gN=self._gN,
         )
         self._pstress_loss = PatchStressLoss()
-        self._pcr_loss = PatchCodingRateLoss(
+        NUM_CHUNKS = 2
+        self._pcr_loss = PatchCodingRateLossV2(
             embed_dim=proj_bottleneck_dim,
             eps=cr_eps,
+            pool_size=4,  # 4 * (2*49) = 392 patches > 256 (bottleneck_dim)
             num_chunks=NUM_CHUNKS,  # for stability
+            gN=self._gN,
+            gV=self._gV,
         )
         self._cosine_loss = CosineAlignmentLoss(eps=cos_eps)
 

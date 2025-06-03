@@ -12,7 +12,7 @@ pretrained_cfg_overlay:
     _target_: src.models.components.converters.timm.partmae_v6.preprocess
     state_dict:
       _target_: torch.load
-      f: outputs/2025-05-27/20-14-09/last.ckpt
+      f: ???
 
 
 pretrained_strict: true
