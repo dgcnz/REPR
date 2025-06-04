@@ -100,8 +100,8 @@ def _sample_offgrid(
     """
     nW = W // patch_size
     nH = H // patch_size
-    xs = torch.randint(0, H - patch_size, (B, nH * nW), device=device)
-    ys = torch.randint(0, W - patch_size, (B, nH * nW), device=device)
+    xs = torch.randint(0, W - patch_size, (B, nH * nW), device=device)
+    ys = torch.randint(0, H - patch_size, (B, nH * nW), device=device)
     return ys, xs
 
 
