@@ -12,7 +12,13 @@ from lightning import Fabric
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
 import wandb
-from src.utils import pylogger, extras, checkpointer, task_wrapper, get_metric_value
+from src.utils import (
+    pylogger,
+    extras,
+    checkpointer,
+    task_wrapper,
+    get_metric_value,
+)
 from src.utils.instantiators import instantiate_callbacks, instantiate_loggers
 from src.engine_pretrain import train_one_epoch
 
@@ -100,7 +106,11 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
 
     # Initialize optimizer
     log.info(f"Instantiating optimizer <{cfg.optimizer._target_}>")
-    optimizer = hydra.utils.instantiate(cfg.optimizer, model.parameters())()
+
+    optimizer = hydra.utils.instantiate(
+        cfg.optimizer,
+        model,
+    )()
 
     # Initialize scheduler
     scheduler = None
