@@ -122,6 +122,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         num_register_tokens: int = 0,
         ls_init_values: float = 0.0,  # 1e-5 for dinov2
         pos_embed_mode: str = "sincos",  # "sincos" or "learn"
+        decoder_from_proj: bool = False,
         # ..
     ):
         """ """
@@ -184,7 +185,9 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         )
         self.norm: nn.Module = norm_layer(embed_dim)
         self.decoder_embed_dim = decoder_embed_dim
-        self.decoder_embed = nn.Linear(embed_dim, decoder_embed_dim, bias=True)
+        self.decoder_from_proj = decoder_from_proj
+        dec_in_dim = proj_bottleneck_dim if decoder_from_proj else embed_dim
+        self.decoder_embed = nn.Linear(dec_in_dim, decoder_embed_dim, bias=True)
         self.decoder_blocks = nn.ModuleList(
             [
                 Block(
@@ -606,6 +609,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
     def forward_pose_loss(self, z, gt_dT, joint_ids_remove):
         if not self.lambdas.get("loss_pose", 0):
             return {}
+        V = self.num_views
         z = self.forward_decoder(z)
         z_nopos = _drop_pos(z[:, V:, :], joint_ids_remove)
         pred_dT_nopos = self.pose_head(z_nopos)
@@ -651,7 +655,8 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         gt_dT = self._compute_gt(joint_pos, params, self.Ns)
         patch_pos_nopos = _drop_pos(joint_pos, joint_ids_remove)
         # TRANSFORMER DECODER
-        losses = self.forward_pose_loss(z, gt_dT, joint_ids_remove)
+        dec_input = proj_z if self.decoder_from_proj else z
+        losses = self.forward_pose_loss(dec_input, gt_dT, joint_ids_remove)
         # joint_cls: [B, V, D]
         # teacher is just the cls of the global views
         losses["loss_cinv"] = self._cinv_loss(
