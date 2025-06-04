@@ -8,7 +8,7 @@ total_batch_size: 512
 ckpt_path: artifacts/vitb16_reg4_SimDNIOv2_ep100.pth
 
 # blr: 5e-6
-blr: 1e-5
+blr: 1e-6
 
 trainer:
   max_epochs: 5
@@ -25,6 +25,9 @@ callbacks:
 scheduler:
   warmup_t: ${eval:1 * ${steps_per_epoch}} # 10 epochs
   t_initial: ${eval:${trainer.max_epochs} * ${steps_per_epoch}} # 100 epochs
+
+data:
+  root: /mnt/sdb1/datasets/imagenet/train
 
 train_dataloader:
   batch_size: 128

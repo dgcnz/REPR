@@ -27,7 +27,6 @@ callbacks:
     every_n_steps: 10
 
 data:
-  root: /mnt/sdb1/datasets/imagenet/train
   transform:
     distort_color: true
     n_global_crops: 2
@@ -71,16 +70,16 @@ model:
   lambda_pstress:  0
   lambda_psmooth: 0
   lambda_pmatch: 0.05
-  lambda_pcr: 0.03
+  lambda_pcr: 0.05
 
   lambda_ccr: 0.05
   lambda_cinv: 0.05
 
   cr_eps: 0.5
-  sigma_yx: 1.0
+  sigma_yx: 0.2
   sigma_hw: 1.0
-  beta_f: 0.05
-  beta_w: 1.0
+  beta_f: 0.1
+  beta_w: 3.0
 
 
 scheduler:
