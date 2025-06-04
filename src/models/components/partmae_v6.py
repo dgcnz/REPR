@@ -110,10 +110,10 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         alpha_ts: float = 0.5,
         alpha_s: float = 0.75,
         # patch loss
-        sigma_yx: float = 0.09,
-        sigma_hw: float = 0.30,
+        sigma_yx: float = 0.2,
+        sigma_hw: float = 1.0,
         beta_f: float = 0.1,  # for patch matching loss
-        beta_w: float = 1.0,  # for patch matching loss
+        beta_w: float = 3.0,  # for patch matching loss
         cr_eps: float = 0.5,
         # cosine alignment loss
         cos_eps: float = 1e-8,
