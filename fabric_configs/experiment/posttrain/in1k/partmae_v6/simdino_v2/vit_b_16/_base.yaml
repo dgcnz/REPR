@@ -91,6 +91,15 @@ scheduler:
 optimizer:
   lr: ${eval:${blr} * ${total_batch_size}  / 256}
   weight_decay: 0.05
+  filter_bias_and_bn: true
+  param_group_fn:
+    _target_: src.utils.optimizer.make_param_group_fn
+    param_groups:
+      dino_head: null      # projector
+      decoder: null        # decoder blocks
+    base_lr: ${..lr}
+    weight_decay: ${..weight_decay}
+    filter_bias_and_bn: ${..filter_bias_and_bn}
 
 train_dataloader:
   pin_memory: true
