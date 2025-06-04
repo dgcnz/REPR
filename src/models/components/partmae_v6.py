@@ -660,7 +660,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         losses["loss_ccr"] = self._ccr_loss(proj_cls)
         # losses["loss_psmooth"] = self._psmooth_loss(proj_patches, gt_dT)
         # losses["loss_pstress"] = self._pstress_loss(proj_patches, gt_dT)
-        losses["loss_pmatch"] = self._pmatch_loss(proj_patches, gt_dT)
+        losses.update(self._pmatch_loss(proj_patches, gt_dT))
         losses["loss_pcr"] = self._pcr_loss(proj_patches)
         # losses["loss_cos"] = self._cosine_loss(pred_dT_nopos, gt_dT_nopos)
 

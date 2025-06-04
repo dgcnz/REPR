@@ -1,7 +1,4 @@
 import torch
-import wandb
-
-COUNTER = 0
 
 
 class PatchMatchingLoss(torch.nn.Module):
@@ -74,25 +71,19 @@ class PatchMatchingLoss(torch.nn.Module):
         # Shape: [B, gN]
 
         # --- 8. Weighted Loss Terms ---
-        # exp_cos_sim = torch.exp(-cos_sim / self.beta_f)
-        exp_cos_sim = -cos_sim
+        exp_cos_sim = self.beta_f * torch.log1p(torch.exp(-cos_sim / self.beta_f))
         weighted_feature_losses = weights * exp_cos_sim
         # Shape: [B, gN]
 
-        # global COUNTER
-        # if COUNTER % 10 == 0:
-        #     wandb.log(
-        #         {
-        #             "debug/cos_sim": cos_sim.detach().mean().item(),
-        #             "debug/min_dist": min_dist.detach().mean().item(),
-        #             "debug/weights": weights.detach().mean().item(),
-        #         }
-        #     )
-        # COUNTER += 1
         # --- 9. Final Loss: Average over all B*gN terms ---
         # This effectively averages over all anchors in the batch.
         final_loss = weighted_feature_losses.mean()
-        return final_loss
+        return {
+            "loss_pmatch": final_loss,
+            "loss_pmatch_cos_sim": cos_sim.detach().mean(),
+            "loss_pmatch_mindist_max": min_dist.detach().max(),
+            "loss_pmatch_mindist_mean": min_dist.detach().mean(),
+        }
 
 
 if __name__ == "__main__":
