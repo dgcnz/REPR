@@ -73,7 +73,9 @@ def test_param_group_fn_assigns_lrs_and_weight_decay():
 
 def test_param_group_fn_no_filter():
     model = DummyModel()
-    pg_fn = make_param_group_fn({"dino_head": 0.01}, 0.1, 0.05, filter_bias_and_bn=False)
+    pg_fn = make_param_group_fn(
+        {"dino_head": 0.01}, 0.1, 0.05, filter_bias_and_bn=False
+    )
     groups = pg_fn(model)
     assert groups is not None
 
@@ -82,3 +84,20 @@ def test_param_group_fn_no_filter():
 
     g = _find_group(groups, model.conv.bias)
     assert g["lr"] == 0.1 and g["weight_decay"] == 0.05
+
+
+def test_param_group_fn_group_order():
+    model = DummyModel()
+    pg_fn = make_param_group_fn({"dino_head": 0.01, "decoder": 0.02}, 0.1, 0.05)
+    groups = pg_fn(model)
+
+    assert groups[0]["lr"] == 0.1
+
+    order = []
+    last = None
+    for g in groups:
+        if g["lr"] != last:
+            order.append(g["lr"])
+            last = g["lr"]
+
+    assert order[:3] == [0.1, 0.01, 0.02]
