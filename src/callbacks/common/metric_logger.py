@@ -26,8 +26,11 @@ class MetricLogger(object):
     def _log_lr(
         self, fabric: Fabric, global_step: int, optimizer: torch.optim.Optimizer
     ):
-        lr = optimizer.param_groups[0]["lr"]
-        self._log(fabric, global_step, {"train/lr": lr})
+        metrics = {}
+        for i, group in enumerate(optimizer.param_groups):
+            key = "train/lr" if i == 0 else f"train/lr{i}"
+            metrics[key] = group["lr"]
+        self._log(fabric, global_step, metrics)
 
     def on_train_epoch_start(
         self,
