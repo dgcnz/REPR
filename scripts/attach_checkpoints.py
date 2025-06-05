@@ -3,8 +3,13 @@ import os
 import sys
 import argparse
 from pathlib import Path
+import tempfile
+
 import wandb
 import yaml
+import torch
+from huggingface_hub import HfApi
+from src.models.components.converters.timm.partmae_v6 import preprocess
 
 def find_run_id(wandb_dir: Path) -> str:
     """
@@ -50,14 +55,40 @@ def read_wandb_project_from_config(config_path: Path) -> str:
     except KeyError:
         raise KeyError(f"Could not extract logger.wandb.project from {config_path}")
 
+def log_and_upload_checkpoint(
+    ckpt_path: Path, run, api: HfApi, repo: str, prefix: str
+) -> None:
+    """Log ckpt_path as an artifact and optionally upload to HF"""
+
+    abs_path = ckpt_path.resolve()
+    artifact_name = f"model-{ckpt_path.stem}"
+    artifact = wandb.Artifact(artifact_name, type="model")
+    artifact.add_reference(f"file://{abs_path}", name=ckpt_path.name)
+    print(f"Logging artifact '{artifact_name}' referencing '{ckpt_path.name}' → file://{abs_path}")
+    run.log_artifact(artifact)
+
+    ans = input(f"Upload {ckpt_path.name} to HF? [y/N] ").strip().lower()
+    if ans == "y":
+        state = torch.load(ckpt_path, map_location="cpu")
+        state = preprocess(state)
+        with tempfile.NamedTemporaryFile(suffix=".pt", delete=False) as tmp:
+            torch.save(state, tmp.name)
+            api.upload_file(repo_id=repo, path_or_fileobj=tmp.name, path_in_repo=f"{prefix}/{ckpt_path.name}")
+        os.unlink(tmp.name)
+        print(f"Uploaded {ckpt_path.name} to HF")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Resume a finished W&B run by ID and create one artifact per checkpoint file."
     )
-    parser.add_argument(
-        "output_dir",
+    parser.add_argument("output_dir",
         type=str,
         help="Path to the output directory of the previous run (e.g. 'outputs/2025-06-03/15-36-21')."
+    )
+    parser.add_argument("--repo",
+        default="dgcnz/PART",
+        help="HuggingFace repository ID to upload converted checkpoints to",
     )
     args = parser.parse_args()
 
@@ -85,31 +116,24 @@ def main():
         project=project
     )
 
+    prefix = f"model-{run_id}:v0"
+    api = HfApi()
+    if config_path.exists():
+        api.upload_file(repo_id=args.repo, path_or_fileobj=str(config_path), path_in_repo=f"{prefix}/config.yaml")
+        print("Uploaded config.yaml to HF")
+
     # Find all checkpoint files matching step_*.ckpt
     ckpt_files = sorted(output_dir.glob("step_*.ckpt"))
     if not ckpt_files:
         print(f"WARNING: no files matching 'step_*.ckpt' found under {output_dir}.", file=sys.stderr)
 
-    # For each checkpoint, create and log a separate artifact
     for ckpt in ckpt_files:
-        abs_path = ckpt.resolve()
-        artifact_name = f"model-{ckpt.stem}"   # e.g. "model-step_0000500"
-        artifact = wandb.Artifact(artifact_name, type="model")
-        uri = f"file://{abs_path}"
-        artifact.add_reference(uri, name=ckpt.name)
-        print(f"Logging artifact '{artifact_name}' referencing '{ckpt.name}' → {uri}")
-        run.log_artifact(artifact)
+        log_and_upload_checkpoint(ckpt, run, api, args.repo, prefix)
 
     # If there's a 'last.ckpt', create a separate artifact for it as well
     last_ckpt = output_dir / "last.ckpt"
     if last_ckpt.exists():
-        abs_last = last_ckpt.resolve()
-        artifact_name = "model-last"
-        artifact = wandb.Artifact(artifact_name, type="model")
-        uri = f"file://{abs_last}"
-        artifact.add_reference(uri, name="last.ckpt")
-        print(f"Logging artifact '{artifact_name}' referencing 'last.ckpt' → {uri}")
-        run.log_artifact(artifact)
+        log_and_upload_checkpoint(last_ckpt, run, api, args.repo, prefix)
 
     print("Finished logging all checkpoint artifacts.")
     run.finish()
