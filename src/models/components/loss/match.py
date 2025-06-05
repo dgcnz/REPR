@@ -22,7 +22,6 @@ class PatchMatchingLoss(torch.nn.Module):
         # since gt_dT[b, i, j, k] is always in [-1, 1] the maximum l2 or l1 magnitude is 4.0
         # assuming sigma's are in [0, 1]
         self.inf = 4.0 + 1e-2
-        self.beta_w = beta_w
         if not (0 <= sigma_yx <= 1) or not (0 <= sigma_hw <= 1):
             raise ValueError(
                 "sigma_yx and sigma_hw must be between 0 and 1 (inclusive)."

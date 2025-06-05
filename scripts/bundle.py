@@ -68,15 +68,29 @@ def main():
     p = argparse.ArgumentParser(description="Bundle local Python deps into clipboard.")
     p.add_argument("entry_file", help="Path to the entry Python script")
     p.add_argument("--root", default=".", help="Project root directory")
+    p.add_argument("--output", "-o", help="Output file path (if not specified, copies to clipboard)")
     args = p.parse_args()
 
     entry = os.path.abspath(args.entry_file)
     root = os.path.abspath(args.root)
     files = find_local_deps(entry, root)
+    
+    # Print all files being bundled
+    print("Files being bundled:")
+    for file_path in files:
+        rel_path = os.path.relpath(file_path, root)
+        print(f"  {rel_path}")
+    print()
+    
     bundle = bundle_files(files, root)
 
-    pyperclip.copy(bundle)
-    print(f"Bundled {len(files)} files into clipboard.")
+    if args.output:
+        with open(args.output, 'w', encoding='utf-8') as f:
+            f.write(bundle)
+        print(f"Bundled {len(files)} files to {args.output}")
+    else:
+        pyperclip.copy(bundle)
+        print(f"Bundled {len(files)} files into clipboard.")
 
 if __name__ == "__main__":
     main()

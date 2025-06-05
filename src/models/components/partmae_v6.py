@@ -88,6 +88,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         decoder_embed_dim: int = 512,
         decoder_depth: int = 8,
         decoder_num_heads: int = 16,
+        decoder_from_proj: bool = False,
         sampler: str = "random",
         num_views: int = 12,  # default is 2 global 10 local
         freeze_encoder: bool = False,
@@ -122,7 +123,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         num_register_tokens: int = 0,
         ls_init_values: float = 0.0,  # 1e-5 for dinov2
         pos_embed_mode: str = "sincos",  # "sincos" or "learn"
-        decoder_from_proj: bool = False,
         # ..
     ):
         """ """
