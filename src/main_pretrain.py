@@ -53,6 +53,9 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
     # Set up loggers using instantiate_loggers
     loggers = instantiate_loggers(cfg.get("logger"))
 
+    # Apply extra utilities now that loggers are initialized
+    extras(cfg)
+
     # Create Fabric instance with appropriate strategy
     fabric = Fabric(
         accelerator=cfg.trainer.get("accelerator", "auto"),
@@ -268,13 +271,10 @@ def main_eval(cfg: DictConfig):
 )
 def hydra_main(cfg: DictConfig) -> None:
     """Main entry point for training."""
-    # Apply extra utilities
-    extras(cfg)
-
     # Train the model
     metrics, _ = main_train(cfg)
     torch.cuda.empty_cache()
-    eval_metrics = main_eval(cfg) 
+    eval_metrics = main_eval(cfg)
     print(f"Eval metrics: {eval_metrics}")
     metrics.update(eval_metrics)
 
