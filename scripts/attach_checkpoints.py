@@ -11,6 +11,7 @@ import torch
 from huggingface_hub import HfApi
 from src.models.components.converters.timm.partmae_v6 import preprocess
 
+
 def find_run_id(wandb_dir: Path) -> str:
     """
     Search for a folder named run-<timestamp>-<run_id> inside wandb_dir,
@@ -40,6 +41,7 @@ def find_run_id(wandb_dir: Path) -> str:
         raise RuntimeError(f"Unexpected run-folder name: {run_folder}.")
     return parts[2]
 
+
 def read_wandb_project_from_config(config_path: Path) -> str:
     """
     Load the Hydra config.yaml and return logger.wandb.project.
@@ -55,17 +57,17 @@ def read_wandb_project_from_config(config_path: Path) -> str:
     except KeyError:
         raise KeyError(f"Could not extract logger.wandb.project from {config_path}")
 
-def log_and_upload_checkpoint(
-    ckpt_path: Path, run, api: HfApi, repo: str, prefix: str
-) -> None:
+
+def log_and_upload_checkpoint(ckpt_path: Path, run, api: HfApi, repo: str, prefix: str) -> None:
     """Log ckpt_path as an artifact and optionally upload to HF"""
 
     abs_path = ckpt_path.resolve()
     artifact_name = f"model-{ckpt_path.stem}"
-    artifact = wandb.Artifact(artifact_name, type="model")
-    artifact.add_reference(f"file://{abs_path}", name=ckpt_path.name)
-    print(f"Logging artifact '{artifact_name}' referencing '{ckpt_path.name}' → file://{abs_path}")
-    run.log_artifact(artifact)
+    if run is not None:
+        artifact = wandb.Artifact(artifact_name, type="model")
+        artifact.add_reference(f"file://{abs_path}", name=ckpt_path.name)
+        print(f"Logging artifact '{artifact_name}' referencing '{ckpt_path.name}' → file://{abs_path}")
+        run.log_artifact(artifact)
 
     ans = input(f"Upload {ckpt_path.name} to HF? [y/N] ").strip().lower()
     if ans == "y":
@@ -80,24 +82,42 @@ def log_and_upload_checkpoint(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Resume a finished W&B run by ID and create one artifact per checkpoint file."
+        description=(
+            "Resume a finished W&B run by ID and create one artifact per checkpoint file. "
+            "Use --no-resume-wandb to only upload checkpoints to HF without touching the run."
+        )
     )
-    parser.add_argument("output_dir",
+    parser.add_argument(
+        "output_dir",
         type=str,
-        help="Path to the output directory of the previous run (e.g. 'outputs/2025-06-03/15-36-21')."
+        help="Path to the output directory of the previous run (e.g. 'outputs/2025-06-03/15-36-21').",
     )
-    parser.add_argument("--repo",
+    parser.add_argument(
+        "--repo",
         default="dgcnz/PART",
         help="HuggingFace repository ID to upload converted checkpoints to",
+    )
+    parser.add_argument(
+        "--resume-wandb",
+        dest="resume_wandb",
+        action="store_true",
+        default=True,
+        help="Resume the original wandb run and log checkpoints as artifacts",
+    )
+    parser.add_argument(
+        "--no-resume-wandb",
+        dest="resume_wandb",
+        action="store_false",
+        help="Skip resuming the wandb run (only upload to HF)",
     )
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir).expanduser().resolve()
-    wandb_dir   = output_dir / "wandb"
+    wandb_dir = output_dir / "wandb"
     config_path = output_dir / ".hydra" / "config.yaml"
 
     try:
-        run_id  = find_run_id(wandb_dir)
+        run_id = find_run_id(wandb_dir)
     except Exception as e:
         print(f"ERROR: could not determine run_id: {e}", file=sys.stderr)
         sys.exit(1)
@@ -108,13 +128,13 @@ def main():
         print(f"ERROR: could not read project name from config.yaml: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Resume the original run; rely on WANDB_ENTITY and WANDB_MODE env vars if needed.
-    print(f"Resuming run ID='{run_id}' in project='{project}'")
-    run = wandb.init(
-        id=run_id,
-        resume="allow",
-        project=project
-    )
+    run = None
+    if args.resume_wandb:
+        # Resume the original run; rely on WANDB_ENTITY and WANDB_MODE env vars if needed.
+        print(f"Resuming run ID='{run_id}' in project='{project}'")
+        run = wandb.init(id=run_id, resume="allow", project=project)
+    else:
+        print("Skipping wandb resume; only uploading to HF")
 
     prefix = f"model-{run_id}:v0"
     api = HfApi()
@@ -136,8 +156,10 @@ def main():
         log_and_upload_checkpoint(last_ckpt, run, api, args.repo, prefix)
 
     print("Finished logging all checkpoint artifacts.")
-    run.finish()
+    if run is not None:
+        run.finish()
     print("Done.")
+
 
 if __name__ == "__main__":
     main()
