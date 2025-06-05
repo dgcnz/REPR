@@ -8,22 +8,33 @@ total_batch_size: 512
 ckpt_path: artifacts/vitb16_reg4_SimDNIOv2_ep100.pth
 
 # blr: 5e-6
-blr: 1e-6
+blr: 5e-7
 
 trainer:
-  max_epochs: 5
+  max_epochs: 100
   accelerator: gpu
 
 model:
-  lambda_pose: 0
+  lambda_pmatch: 0.05
+  lambda_pcr: 0
+  lambda_ccr: 0.05
+  lambda_cinv: 0.05
+  lambda_pose: 0.85
+  decoder_embed_dim: 256
+  decoder_from_proj: true
+  decoder_depth: 2
 
 callbacks:
   checkpoint:
     save_perm_every_n_steps: 500
     save_temp_every_n_steps: 100
+  metric_logger:
+    every_n_steps: 10
+  iter_timer:
+    every_n_steps: 10
 
 scheduler:
-  warmup_t: ${eval:1 * ${steps_per_epoch}} # 10 epochs
+  warmup_t: ${eval:5 * ${steps_per_epoch}} # 5 epochs
   t_initial: ${eval:${trainer.max_epochs} * ${steps_per_epoch}} # 100 epochs
 
 data:

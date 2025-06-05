@@ -93,12 +93,12 @@ optimizer:
   filter_bias_and_bn: true
   param_group_fn:
     _target_: src.utils.optimizer.make_param_group_fn
-    param_groups:
-      dino_head: null      # projector
-      decoder: null        # decoder blocks
     base_lr: ${..lr}
     weight_decay: ${..weight_decay}
     filter_bias_and_bn: ${..filter_bias_and_bn}
+    param_groups:
+      dino_head: 1e-4      # projector
+      decoder: 1e-4        # decoder blocks
 
 train_dataloader:
   pin_memory: true
