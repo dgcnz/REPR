@@ -55,7 +55,6 @@ def read_wandb_project_from_config(config_path: Path) -> str:
     except KeyError:
         raise KeyError(f"Could not extract logger.wandb.project from {config_path}")
 
-
 def log_and_upload_checkpoint(
     ckpt_path: Path, run, api: HfApi, repo: str, prefix: str
 ) -> None:
@@ -77,6 +76,7 @@ def log_and_upload_checkpoint(
             api.upload_file(repo_id=repo, path_or_fileobj=tmp.name, path_in_repo=f"{prefix}/{ckpt_path.name}")
         os.unlink(tmp.name)
         print(f"Uploaded {ckpt_path.name} to HF")
+
 
 def main():
     parser = argparse.ArgumentParser(
