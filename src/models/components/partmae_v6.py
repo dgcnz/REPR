@@ -21,7 +21,7 @@ from src.models.components.heads.dino_head import DINOHead
 import logging
 from src.models.components.loss.match import PatchMatchingLoss
 from src.models.components.loss.pose import PoseLoss
-from src.models.components.loss.patch_coding_rate import PatchCodingRateLoss, PatchCodingRateLossV2
+from src.models.components.loss.patch_coding_rate import PatchCodingRateLossV2
 from src.models.components.loss.simdino_ref import CLSCodingRateLoss, CLSInvarianceLoss
 from src.models.components.loss.cos_align import CosineAlignmentLoss
 from src.models.components.loss.stress import PatchStressLoss
@@ -59,6 +59,17 @@ def drop_pos_2d(
     row_idx = ids[:, :, None]
     col_idx = ids[:, None, :]
     return x[batch_idx, row_idx, col_idx]  # → [B, M, M, K]
+
+
+def _freeze_module(module: nn.Module) -> nn.Module:
+    """Disable gradients for ``module`` and wrap its forward with ``torch.no_grad``."""
+    if getattr(module, "_no_grad_wrapped", False):
+        module.requires_grad_(False)
+        return module
+    module.requires_grad_(False)
+    module.forward = torch.no_grad(module.forward)
+    module._no_grad_wrapped = True  # type: ignore[attr-defined]
+    return module
 
 
 SAMPLERS = {
@@ -104,7 +115,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         lambda_ccr: float = 0.0,  # match them (ccr = cinv)
         lambda_cinv: float = 0.0,
         # cosine alignment loss
-        lambda_cos: float = 0.0,
+        lambda_cosa: float = 0.0,
         # pose loss
         criterion: str = "l1",
         alpha_t: float = 0.5,
@@ -251,19 +262,23 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             gN=self._gN,
             gV=self._gV,
         )
-        self._cosine_loss = CosineAlignmentLoss(eps=cos_eps)
+        self._cosa_loss = CosineAlignmentLoss(eps=cos_eps)
 
         self.lambdas = {
-            # "loss_psmooth": lambda_psmooth, # comp
+            # "loss_psmooth": lambda_psmooth,  # comp
             # "loss_pstress": lambda_pstress,
             "loss_pmatch": lambda_pmatch,  # comp
             "loss_pcr": lambda_pcr,  # exp
             "loss_cinv": lambda_cinv,  # comp
             "loss_ccr": lambda_ccr,  # exp
-            "loss_cos": lambda_cos,
+            "loss_cosa": lambda_cosa,
+            "loss_pose": lambda_pose,
         }
-        if lambda_pose > 0:
-            self.lambdas["loss_pose"] = lambda_pose
+
+        for key, _lambda in self.lambdas.items():
+            if _lambda == 0:
+                module_name = f"_{key.removeprefix('loss_')}_loss"
+                self.freeze(module_name)
         # It's important to ensure that expansion and compression losses are complementary
         # otherwise representational collapse can happen
         # assert lambda_psmooth == lambda_pcr
@@ -274,6 +289,41 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.initialize_weights()
         if freeze_encoder:
             self.freeze_encoder()
+
+    # ------------------------------------------------------------------
+    # Utility helpers
+    # ------------------------------------------------------------------
+
+    def freeze(self, module: str) -> None:
+        """Freeze the parameters of a given loss module or related blocks."""
+        if not hasattr(self, module):
+            raise ValueError(f"Unknown module '{module}' to freeze")
+
+        setattr(self, module, _freeze_module(getattr(self, module)))
+
+        if module == "_pose_loss":
+            for p in self.get_decoder_params():
+                p.requires_grad_(False)
+
+    def get_encoder_params(self):
+        """Yield parameters of the encoder portion of the model."""
+        for p in self.patch_embed.parameters():
+            yield p
+        for blk in self.blocks:
+            yield from blk.parameters()
+        yield from self.norm.parameters()
+        yield self.cls_token
+        if self.register_tokens is not None:
+            yield self.register_tokens
+        yield from self.dino_head.parameters()
+
+    def get_decoder_params(self):
+        """Yield parameters of the decoder portion of the model."""
+        yield from self.decoder_embed.parameters()
+        for blk in self.decoder_blocks:
+            yield from blk.parameters()
+        yield from self.decoder_norm.parameters()
+        yield from self.pose_head.parameters()
 
     def initialize_weights(self):
         r"""
@@ -667,7 +717,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # losses["loss_pstress"] = self._pstress_loss(proj_patches, gt_dT)
         losses.update(self._pmatch_loss(proj_patches, gt_dT))
         losses["loss_pcr"] = self._pcr_loss(proj_patches)
-        # losses["loss_cos"] = self._cosine_loss(pred_dT_nopos, gt_dT_nopos)
+        # losses["loss_cosa"] = self._cosa_loss(pred_dT_nopos, gt_dT_nopos)
 
         loss = torch.stack(
             [self.lambdas[k] * losses[k] for k in self.lambdas if k in losses]

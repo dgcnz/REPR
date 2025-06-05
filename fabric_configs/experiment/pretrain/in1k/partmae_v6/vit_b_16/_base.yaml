@@ -56,7 +56,7 @@ model:
   apply_tanh: false
   lambda_pose:  0.9
   lambda_dino: 0.1
-  lambda_cos:  0
+  lambda_cosa:  0
   lambda_patch: 0
 
 scheduler:

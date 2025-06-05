@@ -1,6 +1,7 @@
 import torch
 from PIL import Image
 from torch.utils._pytree import tree_map_only
+
 # Import the two model factories using aliases so that we can distinguish them.
 from src.models.components.partmae_v5 import (
     PART_mae_vit_base_patch16 as partmae_v5_model,
@@ -55,7 +56,7 @@ def test_forward_equivalence():
         pos_mask_ratio=0.75,
         mask_ratio=0.75,
         num_views=gV + lV,
-        lambda_cos=0.0,
+        lambda_cosa=0.0,
         lambda_pose=1.0,
         lambda_pcr=0.0,
         lambda_ccr=0.0,
