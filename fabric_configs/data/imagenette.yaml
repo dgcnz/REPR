@@ -1,7 +1,9 @@
 defaults:
 - transform: basic_224
 
-_target_: src.data.components.hf_dataset.HFDataset
-dataset: "frgfm/imagenette"
-name: 160px
-img_key: "image"
+_target_: torchvision.datasets.Imagenette
+root: /mnt/sdb1/datasets/imagenette
+split: train
+download: true
+size: 160px
+
