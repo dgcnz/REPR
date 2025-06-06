@@ -11,9 +11,13 @@
 import hydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig
+from pathlib import Path
+import re
 import torch
+import wandb
 from hbird.hbird_eval import hbird_evaluation
 import timm
+from src.utils.io import find_run_id, read_wandb_project_from_config
 timm.create_model
 
 def extract_timm_features(model, imgs):
@@ -23,10 +27,33 @@ def extract_timm_features(model, imgs):
     # Remove the first token (CLS token)
     return features[:, model.num_prefix_tokens:], None
 
+
+def setup_wandb_logging(cfg: DictConfig):
+    """Resume wandb run and return (run, step) if enabled."""
+    if not cfg.get("log_wandb"):
+        return None, None
+
+    ckpt_path = Path(cfg.model.pretrained_cfg_overlay.state_dict.state_dict.f)
+    state = torch.load(ckpt_path, map_location="cpu")
+    ckpt_step = int(state["global_step"])
+    m = re.search(r"step_(\d+)\.ckpt", ckpt_path.name)
+    if m and int(m.group(1)) != ckpt_step:
+        raise ValueError(
+            f"step mismatch: filename step {m.group(1)} != global_step {ckpt_step}"
+        )
+    output_dir = ckpt_path.parent
+    run_id = find_run_id(output_dir / "wandb")
+    project = read_wandb_project_from_config(output_dir / ".hydra" / "config.yaml")
+    run = wandb.init(id=run_id, resume="allow", project=project)
+    return run, ckpt_step
+
+
 @hydra.main(version_base="1.3", config_path="../fabric_configs/experiment/hummingbird", config_name="config")
 def main(cfg: DictConfig):
+    run, step = setup_wandb_logging(cfg)
+
     # Build model from config
-    model = instantiate(cfg.model, _convert_="all")  
+    model = instantiate(cfg.model, _convert_="all")
     model = model.eval().to(cfg.device)
 
     # Extract metadata
@@ -55,6 +82,10 @@ def main(cfg: DictConfig):
         val_fs_path=cfg.data.val_fs,
     )
     print(f"mIoU: {mIoU}")
+
+    if run is not None and step is not None:
+        run.log({"eval/hbird/mIoU": mIoU}, step=step)
+        run.finish()
 
 
 if __name__ == "__main__":
