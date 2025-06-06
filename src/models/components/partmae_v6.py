@@ -477,6 +477,12 @@ class PARTMaskedAutoEncoderViT(nn.Module):
 
         if mask_ratio is not None or pos_mask_ratio is not None:
             self._cache_shapes()
+            # keep loss modules in sync with the new configuration
+            if hasattr(self, "_pmatch_loss"):
+                self._pmatch_loss.gN = int(self._gN)
+            if hasattr(self, "_pcr_loss"):
+                self._pcr_loss.gN = int(self._gN)
+                self._pcr_loss.gV = int(self._gV)
 
     def _validate_shapes(self, x: list[Float[Tensor, "B gV|lV C H W"]]):
         if len(x) not in (1, 2):
