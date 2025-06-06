@@ -1,0 +1,11 @@
+# Parameter defaults adapted from DINOv2 k-NN evaluation:
+# https://github.com/facebookresearch/dinov2/blob/main/dinov2/eval/knn.py
+defaults:
+  - _self_
+  - model: partmae_v6
+  - data: imagenet
+
+batch_size: 128
+device: cuda
+nb_knn: [20]
+temperature: 0.07
