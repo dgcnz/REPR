@@ -63,6 +63,26 @@ def bundle_files(file_list, root):
         parts.append("")  # blank line
     return "\n".join(parts)
 
+def filter_files(file_list, root):
+    """Interactively filter files before bundling.
+
+    :param file_list: List of absolute file paths to bundle.
+    :param root: Project root for relative paths.
+    :returns: Filtered list of files.
+    """
+
+    choice = input("Filter out some files? [y/N]: ").strip().lower()
+    if choice not in ("y", "yes"):
+        return file_list
+
+    selected = []
+    for path in file_list:
+        rel = os.path.relpath(path, root)
+        ans = input(f"Include {rel}? [y/N]: ").strip().lower()
+        if ans in ("y", "yes"):
+            selected.append(path)
+    return selected
+
 def main():
     import argparse
     p = argparse.ArgumentParser(description="Bundle local Python deps into clipboard.")
@@ -74,6 +94,8 @@ def main():
     entry = os.path.abspath(args.entry_file)
     root = os.path.abspath(args.root)
     files = find_local_deps(entry, root)
+
+    files = filter_files(files, root)
     
     # Print all files being bundled
     print("Files being bundled:")
