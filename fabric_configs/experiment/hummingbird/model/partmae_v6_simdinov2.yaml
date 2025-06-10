@@ -1,19 +1,20 @@
-_target_: timm.create_model
-model_name: vit_base_patch16_224
-patch_size: 16
-img_size: 224
-pretrained: true
-num_classes: 0
-reg_tokens: 4
-init_values: 1e-5
-no_embed_class: true
-pretrained_cfg_overlay:
-  state_dict: 
-    _target_: src.models.components.converters.timm.partmae_v6.preprocess
-    state_dict:
-      _target_: torch.load
-      f: ???
-
-
-pretrained_strict: true
 ckpt_mode: checkpoint
+ckpt_path: ???
+
+net:
+  _target_: timm.create_model
+  model_name: vit_base_patch16_224
+  patch_size: 16
+  img_size: 224
+  pretrained: true
+  num_classes: 0
+  reg_tokens: 4
+  init_values: 1e-5
+  no_embed_class: true
+  pretrained_strict: true
+  pretrained_cfg_overlay:
+    state_dict: 
+      _target_: src.models.components.converters.timm.partmae_v6.preprocess
+      state_dict:
+        _target_: torch.load
+        f: ${ckpt_path}

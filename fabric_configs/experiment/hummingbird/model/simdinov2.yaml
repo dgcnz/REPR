@@ -1,14 +1,15 @@
-_target_: timm.create_model
-model_name: vit_base_patch14_reg4_dinov2
-pretrained: True
-num_classes: 0
-patch_size: 16
-img_size: 224
-pretrained_cfg_overlay:
-  state_dict: 
-    _target_: src.models.components.converters.timm.simdino.process_simdinov2
-    state_dict:
-      _target_: torch.load
-      f: artifacts/vitb16_reg4_SimDNIOv2_ep100.pth
-
 ckpt_mode: backbone
+net: 
+  _target_: timm.create_model
+  model_name: vit_base_patch14_reg4_dinov2
+  pretrained: True
+  num_classes: 0
+  patch_size: 16
+  img_size: 224
+  pretrained_cfg_overlay:
+    state_dict: 
+      _target_: src.models.components.converters.timm.simdino.process_simdinov2
+      state_dict:
+        _target_: torch.load
+        f: artifacts/vitb16_reg4_SimDNIOv2_ep100.pth
+

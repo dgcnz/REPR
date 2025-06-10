@@ -69,13 +69,13 @@ def validate_checkpoint(ckpt_path: Path) -> tuple[int, str, str, dict]:
 def setup_wandb_logging(cfg: DictConfig):
     """Return a new W&B run and evaluation step."""
 
-    ckpt_mode = cfg.ckpt_mode
-    ckpt_path = Path(cfg.model.pretrained_cfg_overlay.state_dict.state_dict.f)
+    ckpt_mode = cfg.model.ckpt_mode
 
     if ckpt_mode == "backbone":
         run = wandb.init(project="PART-hummingbird")
         return run, 0
     if ckpt_mode == "checkpoint":
+        ckpt_path = Path(cfg.model.ckpt_path)
         ckpt_step, run_id, project, config = validate_checkpoint(ckpt_path)
         attach_artifact_if_missing(ckpt_path, run_id, project)
         run = wandb.init(project="PART-hummingbird", group=run_id, config=config)
@@ -89,7 +89,7 @@ def main(cfg: DictConfig):
     run, step = setup_wandb_logging(cfg)
 
     # Build model from config
-    model = instantiate(cfg.model, _convert_="all")
+    model = instantiate(cfg.model.net, _convert_="all")
     model = model.eval().to(cfg.device)
 
     # Extract metadata

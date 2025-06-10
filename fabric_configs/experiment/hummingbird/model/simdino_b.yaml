@@ -1,0 +1,13 @@
+ckpt_mode: backbone
+net: 
+  _target_: timm.create_model
+  model_name: vit_base_patch16_224.dino
+  pretrained: True
+  num_classes: 0
+  pretrained_cfg_overlay:
+    state_dict: 
+      _target_: src.models.components.converters.timm.simdino.process_simdino
+      state_dict:
+        _target_: torch.load
+        f: artifacts/vitb16_SimDINOv1_gpu8_bs64_ep100.pth
+

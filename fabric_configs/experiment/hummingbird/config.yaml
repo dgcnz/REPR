@@ -6,4 +6,3 @@ defaults:
 # global overrides
 batch_size: 128
 device: cuda
-ckpt_mode: ???

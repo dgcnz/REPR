@@ -1,4 +1,6 @@
-_target_: timm.create_model
-model_name: vit_base_patch16_224
-pretrained: false
-num_classes: 0
+ckpt_mode: backbone
+net:
+  _target_: timm.create_model
+  model_name: vit_base_patch16_224
+  pretrained: false
+  num_classes: 0
