@@ -16,3 +16,4 @@ pretrained_cfg_overlay:
 
 
 pretrained_strict: true
+ckpt_mode: checkpoint

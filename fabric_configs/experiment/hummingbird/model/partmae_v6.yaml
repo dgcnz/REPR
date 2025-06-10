@@ -3,11 +3,13 @@ model_name: vit_base_patch16_224
 pretrained: true
 num_classes: 0
 pretrained_cfg_overlay:
-  state_dict: 
+  state_dict:
     _target_: src.models.components.converters.timm.partmae_v6.preprocess
     state_dict:
       _target_: torch.load
       f: outputs/2025-05-27/20-14-09/last.ckpt
+
+ckpt_mode: checkpoint
 
 
 pretrained_strict: true
