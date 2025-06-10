@@ -47,23 +47,27 @@ def test_vicregl_feature_equivalence():
     repo = torch.hub.load(
         "facebookresearch/VICRegL", "convnext_small_alpha0p75", source="github"
     ).eval()
+    state_dict = torch.hub.load_state_dict_from_url(url, map_location="cpu", check_hash=False)
     timm_model = timm.create_model(
         "convnext_small",
-        pretrained=False,
         num_classes=0,
-        head_norm_first=True,
+        ls_init_value=1,  # Use default initialization
+        pretrained_strict=True,
+        pretrained=True,
+        pretrained_cfg_overlay=dict(
+            state_dict=process_vicregl_convnext(state_dict),
+        )
     )
-    state_dict = torch.hub.load_state_dict_from_url(url, map_location="cpu", check_hash=False)
-    timm_sd = process_vicregl_convnext(state_dict)
-    timm_model.load_state_dict(timm_sd, strict=False)
     timm_model.eval()
 
     x = torch.randn(1, 3, 224, 224)
     with torch.no_grad():
         repo_tokens, _ = repo.forward_features(x)
         feats = timm_model.forward_features(x)
+        # apply head norm
         if isinstance(feats, tuple):
             feats = feats[0]
+        feats = timm_model.head.norm(feats)
         b, c, h, w = feats.shape
         timm_tokens = feats.flatten(2).transpose(1, 2)
 
