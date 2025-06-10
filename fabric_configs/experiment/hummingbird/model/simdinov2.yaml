@@ -10,3 +10,5 @@ pretrained_cfg_overlay:
     state_dict:
       _target_: torch.load
       f: artifacts/vitb16_reg4_SimDNIOv2_ep100.pth
+
+ckpt_mode: backbone
