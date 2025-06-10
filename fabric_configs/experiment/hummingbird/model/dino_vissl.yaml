@@ -1,0 +1,9 @@
+ckpt_mode: backbone
+net:
+  _target_: timm.create_model
+  model_name: vit_small_patch16_224.dino
+  pretrained: True
+  pretrained_cfg_overlay:
+    state_dict: 
+      _target_: torch.load
+      f: artifacts/dino_vissl.pth

@@ -8,14 +8,19 @@
 # data=voc \
 # model.pretrained_cfg_overlay.state_dict.state_dict.f=$(ls -d outputs/2025-05-29/12-10-52/*  | grep epoch | paste -sd, -)
 
-import hydra
-from hydra.utils import instantiate
-from omegaconf import DictConfig
-from pathlib import Path
+import os
 import re
+import logging
+from pathlib import Path
+
+import hydra
 import torch
 import wandb
+from hydra.utils import instantiate
+from omegaconf import DictConfig, OmegaConf
 from hbird.hbird_eval import hbird_evaluation
+
+import timm  # noqa: F401
 from src.utils.io import find_run_id, read_wandb_project_from_config
 
 
@@ -81,12 +86,27 @@ def extract_timm_features(model: torch.nn.Module, imgs: torch.Tensor):
     raise ValueError(f"Unsupported timm model: {name}")
 
 
-def setup_wandb_logging(cfg: DictConfig):
-    """Resume wandb run and return (run, step) if enabled."""
-    if not cfg.get("log_wandb"):
-        return None, None
+def attach_artifact_if_missing(ckpt_path: Path, run_id: str, project: str) -> None:
+    """Attach ckpt_path as an artifact to the original run if not present."""
+    api = wandb.Api()
+    entity = os.environ.get("WANDB_ENTITY")
+    run_ref = f"{entity}/{project}/{run_id}" if entity else f"{project}/{run_id}"
+    run = api.run(run_ref)
+    artifact_name = f"model-{ckpt_path.stem}"
+    if any(a.name == artifact_name for a in run.logged_artifacts()):
+        logging.warning("%s already logged", artifact_name)
+        return
+    resume = wandb.init(id=run_id, resume="allow", project=project)
+    artifact = wandb.Artifact(artifact_name, type="model")
+    artifact.add_reference(f"file://{ckpt_path.resolve()}", name=ckpt_path.name)
+    resume.log_artifact(artifact)
+    resume.finish()
 
-    ckpt_path = Path(cfg.model.pretrained_cfg_overlay.state_dict.state_dict.f)
+
+def validate_checkpoint(ckpt_path: Path) -> tuple[int, str, str, dict]:
+    """Validate ckpt_path and return (step, run_id, project, config)."""
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"checkpoint {ckpt_path} not found")
     state = torch.load(ckpt_path, map_location="cpu")
     ckpt_step = int(state["global_step"])
     m = re.search(r"step_(\d+)\.ckpt", ckpt_path.name)
@@ -96,9 +116,28 @@ def setup_wandb_logging(cfg: DictConfig):
         )
     output_dir = ckpt_path.parent
     run_id = find_run_id(output_dir / "wandb")
-    project = read_wandb_project_from_config(output_dir / ".hydra" / "config.yaml")
-    run = wandb.init(id=run_id, resume="allow", project=project)
-    return run, ckpt_step
+    config_path = output_dir / ".hydra" / "config.yaml"
+    project = read_wandb_project_from_config(config_path)
+    config = OmegaConf.to_container(OmegaConf.load(config_path), resolve=True)
+    return ckpt_step, run_id, project, config
+
+
+def setup_wandb_logging(cfg: DictConfig):
+    """Return a new W&B run and evaluation step."""
+
+    ckpt_mode = cfg.model.ckpt_mode
+
+    if ckpt_mode == "backbone":
+        run = wandb.init(project="PART-hummingbird")
+        return run, 0
+    if ckpt_mode == "checkpoint":
+        ckpt_path = Path(cfg.model.ckpt_path)
+        ckpt_step, run_id, project, config = validate_checkpoint(ckpt_path)
+        attach_artifact_if_missing(ckpt_path, run_id, project)
+        run = wandb.init(project="PART-hummingbird", group=run_id, config=config)
+        run.use_artifact(f"{run_id}/model-{ckpt_path.stem}:latest", type="model")
+        return run, ckpt_step
+    raise ValueError(f"unknown ckpt_mode {ckpt_mode}")
 
 
 @hydra.main(version_base="1.3", config_path="../fabric_configs/experiment/hummingbird", config_name="config")
@@ -106,7 +145,7 @@ def main(cfg: DictConfig):
     run, step = setup_wandb_logging(cfg)
 
     # Build model from config
-    model = instantiate(cfg.model, _convert_="all")
+    model = instantiate(cfg.model.net, _convert_="all")
     model = model.eval().to(cfg.device)
 
     # Extract metadata
