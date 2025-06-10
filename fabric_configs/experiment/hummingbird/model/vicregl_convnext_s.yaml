@@ -1,0 +1,12 @@
+_target_: timm.create_model
+model_name: convnext_small
+pretrained: true
+num_classes: 0
+head_norm_first: true
+pretrained_cfg_overlay:
+  state_dict:
+    _target_: src.models.components.converters.timm.vicregl.process_vicregl_convnext
+    state_dict:
+      _target_: torch.hub.load_state_dict_from_url
+        url: "https://dl.fbaipublicfiles.com/vicregl/convnext_small_alpha0.75.pth"
+

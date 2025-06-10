@@ -16,16 +16,69 @@ import re
 import torch
 import wandb
 from hbird.hbird_eval import hbird_evaluation
-import timm
 from src.utils.io import find_run_id, read_wandb_project_from_config
-timm.create_model
 
-def extract_timm_features(model, imgs):
-    # Extract the features from the model
+
+def _convnext_patch_size(model: torch.nn.Module) -> int:
+    """Return effective patch size for a ConvNeXt model.
+
+    :param model: ConvNeXt backbone.
+    :returns: Input patch size mapped to a single token.
+    """
+
+    patch = model.stem[0].stride[0]
+    for stage in model.stages:
+        ds = getattr(stage, "downsample", None)
+        if ds is None:
+            continue
+        for m in ds.modules():
+            if isinstance(m, torch.nn.Conv2d):
+                patch *= m.stride[0]
+    return patch
+
+def _extract_timm_features_vit(model: torch.nn.Module, imgs: torch.Tensor):
+    """Return patch tokens from a ViT model.
+
+    :param model: timm vision transformer.
+    :param imgs: Input batch of images.
+    :returns: Patch tokens and ``None``.
+    """
+
     with torch.no_grad():
-        features = model.forward_features(imgs)
-    # Remove the first token (CLS token)
-    return features[:, model.num_prefix_tokens:], None
+        feats = model.forward_features(imgs)
+    if isinstance(feats, tuple):
+        feats = feats[0]
+    prefix = getattr(model, "num_prefix_tokens", 0)
+    return feats[:, prefix:], None
+
+
+def _extract_timm_features_convnext(model: torch.nn.Module, imgs: torch.Tensor):
+    """Return patch tokens from a ConvNeXt model.
+
+    :param model: timm ConvNeXt.
+    :param imgs: Input batch of images.
+    :returns: Patch tokens and ``None``.
+    """
+
+    with torch.no_grad():
+        feats = model.forward_features(imgs)
+    if isinstance(feats, tuple):
+        feats = feats[0]
+    b, c, h, w = feats.shape
+    feats = feats.permute(0, 2, 3, 1).reshape(b, h * w, c)
+    return feats, None
+
+
+def extract_timm_features(model: torch.nn.Module, imgs: torch.Tensor):
+    """Return patch tokens from a timm model."""
+
+    name = model.default_cfg.get("architecture", "")
+    if name.startswith("vit_"):
+        return _extract_timm_features_vit(model, imgs)
+    if name.startswith("convnext_"):
+        return _extract_timm_features_convnext(model, imgs)
+
+    raise ValueError(f"Unsupported timm model: {name}")
 
 
 def setup_wandb_logging(cfg: DictConfig):
@@ -57,9 +110,17 @@ def main(cfg: DictConfig):
     model = model.eval().to(cfg.device)
 
     # Extract metadata
-    embed_dim = model.embed_dim
-    patch_size = model.patch_embed.proj.weight.shape[-1]
-    input_size = model.patch_embed.img_size[-1]
+    name = model.default_cfg.get("architecture", "")
+    if name.startswith("vit_"):
+        embed_dim = model.embed_dim
+        patch_size = model.patch_embed.proj.weight.shape[-1]
+        input_size = model.patch_embed.img_size[-1]
+    elif name.startswith("convnext_"):
+        input_size = model.default_cfg.get("input_size", (3, 224, 224))[-1]
+        embed_dim = model.num_features
+        patch_size = _convnext_patch_size(model)
+    else:
+        raise ValueError(f"Unsupported timm model: {name}")
 
     # Run evaluation
     mIoU = hbird_evaluation(
