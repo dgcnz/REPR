@@ -53,7 +53,7 @@ total_batch_size_per_gpu: ${eval:${total_batch_size} // ${trainer.devices}}
 steps_per_epoch: ${eval:${total_images} // ${total_batch_size}}
 
 model:
-  _target_: src.models.components.utils.partmae_v6_simdino_v2.PARTMaskedAutoEncoderViTFromSimDINOv2
+  _target_: src.models.components.converters.partmae_v6.simdino_v2.PARTMaskedAutoEncoderViTFromSimDINOv2
   mask_ratio: 0.75
   pos_mask_ratio: 0.75
   sampler: stratified_jittered

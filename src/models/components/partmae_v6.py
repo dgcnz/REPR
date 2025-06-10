@@ -300,6 +300,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             raise ValueError(f"Unknown module '{module}' to freeze")
 
         setattr(self, module, _freeze_module(getattr(self, module)))
+        logging.info(f"Freezing module: {module}")
 
         if module == "_pose_loss":
             for p in self.get_decoder_params():
@@ -349,7 +350,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             nn.init.normal_(self.register_tokens, std=1e-6)
         self.apply(self._init_weights)
         # TODO: should i really initialize pose_head.linear?
-        # nn.init.kaiming_uniform_(self.pose_head.linear.weight, a=4)
+       # nn.init.kaiming_uniform_(self.pose_head.linear.weight, a=4)
 
     def _init_weights(self, m):
         """
@@ -416,6 +417,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
     def _cache_shapes(self):
         (gN, gM), gV = self._get_N(self.img_size), 2
         (lN, lM), lV = self._get_N(self.local_img_size), self.num_views - 2
+        V = gV + lV
         Ns = [gN] * gV + [lN] * lV
         Ms = [gM] * gV + [lM] * lV
         N = gN * gV + lN * lV
@@ -427,6 +429,11 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             # have cpu/int and cuda tensors
             self._register_or_overwrite_buffer(k, v)
             setattr(self, f"_{k}", v)
+
+        view_ids_N = torch.arange(V).repeat_interleave(self.Ns, output_size=N)
+        view_ids_M = torch.arange(V).repeat_interleave(self.Ms, output_size=M)
+        self._register_or_overwrite_buffer("view_ids_N", view_ids_N)
+        self._register_or_overwrite_buffer("view_ids_M", view_ids_M)
 
     def _register_or_overwrite_buffer(self, name: str, value: int | list[int]):
         if hasattr(self, name):

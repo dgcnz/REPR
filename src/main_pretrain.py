@@ -14,11 +14,9 @@ from torch.utils.data import DataLoader
 import wandb
 from src.utils import (
     pylogger,
-    extras,
     checkpointer,
-    task_wrapper,
-    get_metric_value,
 )
+from src.utils.utils import extras, task_wrapper, get_metric_value
 from src.utils.instantiators import instantiate_callbacks, instantiate_loggers
 from src.engine_pretrain import train_one_epoch
 
