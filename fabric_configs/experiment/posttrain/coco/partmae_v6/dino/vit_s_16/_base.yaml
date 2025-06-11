@@ -86,6 +86,7 @@ scheduler:
   warmup_t: ??? 
   t_initial: ??? # 800 epochs?
   warmup_lr_init: 1e-7
+  lr_min: 1e-6
 
 
 optimizer:
@@ -99,7 +100,7 @@ optimizer:
     filter_bias_and_bn: ${..filter_bias_and_bn}
     param_groups:
       dino_head: ${eval:5e-5 * ${total_batch_size} / 256}
-      decoder: ${eval:5e-5 * ${total_batch_size} / 256}        
+      decoder: ${eval:5e-4 * ${total_batch_size} / 256}        
 
 train_dataloader:
   pin_memory: true
