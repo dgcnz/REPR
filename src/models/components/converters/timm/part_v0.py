@@ -200,7 +200,6 @@ if __name__ == "__main__":
     )
 
 
-    print("hi")
     tgt_out["z"] = tgt.forward_features(x)
     src_out["z"] = src.forward_features_pretrain(x)
     assert torch.allclose(tgt_out["z"], src_out["z"], atol=1e-5), (
