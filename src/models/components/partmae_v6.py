@@ -23,7 +23,6 @@ from src.models.components.loss.match import PatchMatchingLoss
 from src.models.components.loss.pose import PoseLoss
 from src.models.components.loss.patch_coding_rate import PatchCodingRateLossV2
 from src.models.components.loss.simdino_ref import CLSCodingRateLoss, CLSInvarianceLoss
-from src.models.components.loss.cos_align import CosineAlignmentLoss
 from src.models.components.loss.stress import PatchStressLoss
 
 
@@ -262,7 +261,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             gN=self._gN,
             gV=self._gV,
         )
-        self._cosa_loss = CosineAlignmentLoss(eps=cos_eps)
+        assert lambda_cosa == 0, "deprecated"
 
         self.lambdas = {
             # "loss_psmooth": lambda_psmooth,  # comp
@@ -271,7 +270,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             "loss_pcr": lambda_pcr,  # exp
             "loss_cinv": lambda_cinv,  # comp
             "loss_ccr": lambda_ccr,  # exp
-            "loss_cosa": lambda_cosa,
             "loss_pose": lambda_pose,
         }
 
