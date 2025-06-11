@@ -4,7 +4,7 @@ defaults:
 
 compile: False
 
-total_batch_size: 512
+total_batch_size: 1024
 ckpt_path: artifacts/dino_deitsmall16_pretrain_full_checkpoint.pth
 
 # blr: 5e-6
@@ -17,7 +17,7 @@ trainer:
   # accelerator: gpu
   # strategy: ddp
   num_nodes: 1
-  devices: 1
+  devices: 2
 
 model:
   lambda_pmatch: 0
