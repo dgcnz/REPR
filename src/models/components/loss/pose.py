@@ -37,7 +37,6 @@ class PoseLoss(nn.Module):
             ]
         )
         total_intra_t, total_intra_s = total_intra[0:2].sum(), total_intra[2:4].sum()
-        del loss_full
 
         sum_Ms_sq = sum(m**2 for m in Ms)
         diag_count = sum_Ms_sq * B

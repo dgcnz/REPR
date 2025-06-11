@@ -698,7 +698,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             for group in zip(*[self._encode_resgroup(_x) for _x in x])
         ]
         z = torch.cat([joint_cls, joint_patches], dim=1)
-        del joint_cls, joint_patches, x
         # joint_ids_remove need to be offset:
         # (index 0 of second view is 0 + number of patches in first view)
         M = joint_ids_remove.shape[1]
