@@ -106,6 +106,8 @@ if __name__ == "__main__":
     import timm
     from timm.models.vision_transformer import VisionTransformer
     from src.models.components.part_v0 import VisionTransformer as PARTVisionTransformer
+    import logging
+    logging.basicConfig(level=logging.INFO)
 
     ckpt = torch.load(
         "artifacts/tasks_2/9u72ktsg6k/artifacts/checkpoint_epoch_200.pth",

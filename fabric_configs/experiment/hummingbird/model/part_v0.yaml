@@ -15,5 +15,6 @@ net:
       _target_: src.models.components.converters.timm.part_v0.preprocess
       state_dict:
         _target_: torch.load
-        f: artifacts/tasks_2/9u72ktsg6k/artifacts/checkpoint_epoch_200.pth
+        # f: artifacts/tasks_2/9u72ktsg6k/artifacts/checkpoint_epoch_200.pth
+        f: artifacts/tasks_2/ei5wnt8xsp/artifacts/checkpoint_epoch_200.pth
         weights_only: false

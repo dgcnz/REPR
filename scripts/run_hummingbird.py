@@ -51,8 +51,7 @@ def _extract_timm_features_vit(model: torch.nn.Module, imgs: torch.Tensor):
 
     with torch.no_grad():
         feats = model.forward_features(imgs)
-    if isinstance(feats, tuple):
-        feats = feats[0]
+    
     prefix = getattr(model, "num_prefix_tokens", 0)
     return feats[:, prefix:], None
 
@@ -67,10 +66,8 @@ def _extract_timm_features_convnext(model: torch.nn.Module, imgs: torch.Tensor):
 
     with torch.no_grad():
         feats = model.forward_features(imgs)
-    if isinstance(feats, tuple):
-        feats = feats[0]
-    b, c, h, w = feats.shape
-    feats = feats.permute(0, 2, 3, 1).reshape(b, h * w, c)
+
+    feats = feats.flatten(2, 3).transpose(1, 2)
     return feats, None
 
 
