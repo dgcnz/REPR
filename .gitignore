@@ -182,3 +182,4 @@ output
 docs/papers/
 *.pkl
 multirun
+*.pickle
