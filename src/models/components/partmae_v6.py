@@ -348,7 +348,8 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             nn.init.normal_(self.register_tokens, std=1e-6)
         self.apply(self._init_weights)
         # TODO: should i really initialize pose_head.linear?
-       # nn.init.kaiming_uniform_(self.pose_head.linear.weight, a=4)
+
+    # nn.init.kaiming_uniform_(self.pose_head.linear.weight, a=4)
 
     def _init_weights(self, m):
         """
@@ -506,12 +507,11 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             if gV_actual != self._gV or lV_actual != self._lV:
                 self._cache_shapes()
 
-    def prepare_tokens(self, x: Tensor):
-        # 1. (Off-grid) Patch (sub-)sampling and embedding
-        x, patch_positions_vis = self.patch_embed(x)
-        # 2. Mask Position Embeddings
-        B_total, N_vis, D = x.shape
-        ids_keep, ids_restore, ids_remove = self.random_masking(x, self.pos_mask_ratio)
+    def _get_pos_embed(self, patch_positions_vis):
+        B_total, N_vis, _ = patch_positions_vis.shape
+        ids_keep, ids_restore, ids_remove = self.random_masking(
+            B_total, N_vis, self.pos_mask_ratio, patch_positions_vis.device
+        )
         N_pos = ids_keep.shape[1]
         N_nopos = N_vis - N_pos
         patch_positions_pos = torch.gather(
@@ -531,8 +531,12 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         mask_pos_tokens = self.mask_pos_token.expand(B_total, N_nopos, -1)
         pos_embed = torch.cat([pos_embed, mask_pos_tokens], dim=1)
         pos_embed = torch.gather(
-            pos_embed, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, D)
+            pos_embed, 1, index=ids_restore.unsqueeze(-1).repeat(1, 1, self.embed_dim)
         )
+        return pos_embed, ids_remove, ids_restore
+
+    def _pos_embed(self, x, patch_positions_vis):
+        pos_embed, ids_remove, ids_restore = self._get_pos_embed(patch_positions_vis)
         x = x + pos_embed
         # 4. Class Token
         to_cat = [
@@ -544,7 +548,12 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             to_cat.append(self.register_tokens.expand(x.shape[0], -1, -1))
 
         x = torch.cat(to_cat + [x], dim=1)
-        return x, patch_positions_vis, ids_remove
+        return x, ids_remove, ids_restore
+
+    def prepare_tokens(self, x: Tensor):
+        x, patch_positions_vis = self.patch_embed(x)
+        x, ids_remove, ids_restore = self._pos_embed(x, patch_positions_vis)
+        return x, patch_positions_vis, ids_remove, ids_restore
 
     def forward_encoder(self, x: Tensor) -> dict:
         r"""
@@ -556,11 +565,11 @@ class PARTMaskedAutoEncoderViT(nn.Module):
                  "patch_positions_vis": Tensor of shape [B*n_views, N_vis, 2],
                  "ids_remove_pos": Tensor of shape [B*n_views, M] (M indices of masked tokens)
         """
-        x, patch_positions_vis, ids_remove_pos = self.prepare_tokens(x)
+        x, patch_positions_vis, ids_remove_pos, ids_restore = self.prepare_tokens(x)
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
-        return x, patch_positions_vis, ids_remove_pos
+        return x, patch_positions_vis, ids_remove_pos, ids_restore
 
     def forward_decoder(self, z: Tensor) -> dict:
         r"""
@@ -575,7 +584,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         x = self.decoder_norm(x)
         return x
 
-    def random_masking(self, x: Tensor, mask_ratio: float):
+    def random_masking(self, B: int, N: int, mask_ratio: float, device: str):
         r"""
         Randomly mask tokens.
 
@@ -586,9 +595,8 @@ class PARTMaskedAutoEncoderViT(nn.Module):
                  ids_restore: Tensor of shape [B, N]
                  ids_remove: Tensor of shape [B, N*mask_ratio]
         """
-        B, N, D = x.shape
         len_keep = int(N * (1 - mask_ratio))
-        noise = torch.rand(B, N, device=x.device)
+        noise = torch.rand(B, N, device=device)
         ids_shuffle = torch.argsort(noise, dim=1)
         ids_restore = torch.argsort(ids_shuffle, dim=1)
         ids_keep = ids_shuffle[:, :len_keep]
@@ -654,7 +662,9 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         x: Float[Tensor, "B gV|lV C H W"],
     ):
         B, V, _, _, _ = x.shape
-        z, patch_positions_vis, ids_remove_pos = self.forward_encoder(x.flatten(0, 1))
+        z, patch_positions_vis, ids_remove_pos, _ = self.forward_encoder(
+            x.flatten(0, 1)
+        )
         N_vis, N_nopos = patch_positions_vis.shape[-2], ids_remove_pos.shape[-1]
 
         return (

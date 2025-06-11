@@ -50,7 +50,7 @@ def get_canonical_coords(
     y_coords = torch.arange(grid_size[0], **kwargs) * patch_size
     x_coords = torch.arange(grid_size[1], **kwargs) * patch_size
     grid_y, grid_x = torch.meshgrid(y_coords, x_coords, indexing="ij")
-    grid_positions = torch.stack([grid_x, grid_y], dim=-1).view(-1, 2)
+    grid_positions = torch.stack([grid_y, grid_x], dim=-1).view(-1, 2)
     return grid_positions
 
 

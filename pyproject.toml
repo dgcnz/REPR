@@ -79,29 +79,12 @@ dev = [
     "typeguard>=4.4.2",
 ]
 
-[tool.ruff]
-exclude = [
-    "playground/",
-    "scripts/",
-    "third-party/",
-    "src/",
-    "tests/",
-]
 
 [tool.ruff.lint]
 ignore = [
     "F722",
-    "F401",
-    "E402",
-    "E741",
-    "E701",
 ]
 
-# pyproject.toml
-[tool.pytest.ini_options]
-testpaths = [
-    "tests",
-]
 
 
 [tool.poe.tasks]

@@ -318,3 +318,28 @@ class OffGridPatchEmbed(nn.Module):
         )
         patch_tokens = self.proj(patches_flat)
         return patch_tokens, patch_positions
+
+
+if __name__ == "__main__":
+    # Example usage
+    from timm.models.layers import PatchEmbed
+
+    B, H, W, P, D, C = 4, 224, 224, 16, 768, 3
+    DEVICE = 'cpu'
+    autocast = False
+    net1 = OffGridPatchEmbed(
+        patch_size=P, embed_dim=D, sampler=ongrid_sampling_canonical, mask_ratio=0
+    ).to(DEVICE)
+    net2 = PatchEmbed(patch_size=P, in_chans=C, embed_dim=D).to(DEVICE)
+    net2.proj.weight.data = net1.proj.weight.data.reshape(D, C, P, P)
+    net2.proj.bias.data = net1.proj.bias.data
+
+    x = torch.randn(B, 3, H, W).to(DEVICE)
+    with torch.amp.autocast(DEVICE, enabled=autocast):
+        patch_tokens, patch_positions = net1(x)
+        patch_tokens_timm = net2(x)
+
+        # check equality
+        assert torch.allclose(patch_tokens, patch_tokens_timm, atol=1e-5), (
+            "Patch tokens do not match!"
+        ) 
