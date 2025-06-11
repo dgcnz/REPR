@@ -1,0 +1,100 @@
+# @package _global_
+
+defaults:
+  - data: clevrtexv2_outd
+  - /scheduler: cosine
+  - /optimizer: adamw
+  - model: null
+  - callbacks:
+    - common/checkpoint
+    - common/metric_logger
+    - common/iter_timer
+  - logger: wandb
+  - experiment: null 
+  - metric_logger: null
+  - override data/transform: null
+  - _self_
+
+extras:
+  ignore_warnings: False
+  enforce_tags: True
+  print_config: True
+  theme: ansi_light
+
+task_name: "droppos_pretrain"
+
+tags: ["droppos", "pretrain"]
+ckpt_path: null
+seed: null
+
+data:
+  root: "/home/dgcnz/development/datasets/clevrtex/clevrtexv2_outd"
+  transform: 
+    _target_: src.data.components.transforms.mask_transform.MaskTransform
+    args:
+      input_size: 224
+      token_size: 14
+      mask_ratio: 0.75
+      mask_block: false
+
+trainer:
+  accelerator: 'auto'
+  devices: 'auto'
+  num_nodes: 1
+  precision: bf16-mixed
+  strategy: 'auto'
+  max_epochs: 400  # Default DropPos setting
+  min_epochs: null
+  accumulate_grad_batches: 1
+  gradient_clip_val: 5.0  # Default DropPos setting
+
+# Model-specific settings
+model:
+  _target_: src.models.components.droppos.DropPos_mae_vit_base_patch16
+  mask_ratio: 0.75
+  pos_mask_ratio: 0.75
+  mask_token_type: "param"
+  shuffle: False
+  # label_smoothing_sigma: 0.0
+  # sigma_decay: False
+  conf_ignore: False
+  attn_guide: False
+
+# Training/optimization parameters
+train_dataloader:
+  batch_size: 64
+  num_workers: 8
+  pin_memory: True
+  shuffle: True
+  drop_last: True
+
+scheduler:
+  warmup_t: 100 
+  t_initial: 1000 # 800 epochs?
+  warmup_lr_init: 1e-5
+
+optimizer:
+  # lr: ${eval:${blr} * ${trainer.accumulate_grad_batches} * ${trainer.num_nodes} * ${trainer.devices} * ${train_dataloader.batch_size}  / 256}
+  lr: 0.0001
+  weight_decay: 0.05
+
+
+paths:
+  root_dir: ${oc.env:PROJECT_ROOT}
+  log_dir: ${paths.root_dir}/logs/
+  output_dir: ${hydra:runtime.output_dir}
+  work_dir: ${hydra:runtime.cwd}
+
+metric_collection:
+  _target_: src.models.components.metrics.droppos.DropPosMetrics
+
+run:
+  dir: ${paths.log_dir}/${task_name}/runs/${now:%Y-%m-%d}_${now:%H-%M-%S}
+sweep:
+  dir: ${paths.log_dir}/${task_name}/multiruns/${now:%Y-%m-%d}_${now:%H-%M-%S}
+  subdir: ${hydra:job.num}
+
+job_logging:
+  handlers:
+    file:
+      filename: ${hydra:runtime.output_dir}/${task_name}.log
