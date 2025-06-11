@@ -4,7 +4,7 @@ defaults:
 
 compile: False
 
-total_batch_size: 2048
+total_batch_size: 1024
 ckpt_path: artifacts/dino_deitsmall16_pretrain_full_checkpoint.pth
 
 # blr: 5e-6
@@ -28,6 +28,7 @@ model:
   decoder_embed_dim: 256
   decoder_from_proj: true
   decoder_depth: 2
+  cr_eps: 0.1
 
 callbacks:
   checkpoint:
@@ -46,7 +47,7 @@ data:
   root: /scratch-nvme/ml-datasets/coco/train/data
 
 train_dataloader:
-  batch_size: 2048
+  batch_size: 1024
   num_workers: 16
 
 # evals:
