@@ -1,30 +1,23 @@
-from __future__ import annotations
-
 import logging
-import timm
 from src.models.components.partmae_v6 import PARTMaskedAutoEncoderViT
 
 
 class PARTMaskedAutoEncoderViTFromDINO(PARTMaskedAutoEncoderViT):
-    """Load a timm DINO ViT backbone into :class:`PARTMaskedAutoEncoderViT`.
+    def load_state_dict(self, state_dict, strict: bool = True):
+        state_dict = state_dict["teacher"]
+        # remote .backbone prefix
+        state_dict = {
+            k.replace("backbone.", ""): v for k, v in state_dict.items()
+        }
+        # replace head. with dino_head.
+        state_dict = {
+            k.replace("head.", "dino_head."): v for k, v in state_dict.items()
+        }
+        # remove all dino_head.last_layer.*
+        state_dict = {
+            k: v for k, v in state_dict.items() if not k.startswith("dino_head.last_layer.")
+        }
 
-    If ``state_dict`` is ``None`` this will download the pretrained
-    ``vit_small_patch16_224.dino`` weights from ``timm`` and use them as
-    initialization for the encoder.
-    """
-
-    def __init__(self, *args, **kwargs) -> None:
-        kwargs.setdefault("embed_dim", 384)
-        kwargs.setdefault("depth", 12)
-        kwargs.setdefault("num_heads", 6)
-        super().__init__(*args, **kwargs)
-
-    def load_state_dict(self, state_dict=None, strict: bool = True):
-        if state_dict is None:
-            backbone = timm.create_model(
-                "vit_small_patch16_224.dino", pretrained=True, num_classes=0
-            )
-            state_dict = backbone.state_dict()
         miss, unex = super().load_state_dict(state_dict, strict=False)
         if self.dino_head is None:
             unex = [k for k in unex if not k.startswith("dino_head.")]
@@ -47,3 +40,12 @@ class PARTMaskedAutoEncoderViTFromDINO(PARTMaskedAutoEncoderViT):
             assert not other_miss, f"missing keys: {other_miss}"
             assert not unex, f"unexpected keys: {unex}"
         return miss, unex
+
+
+if __name__ == "__main__":
+    # Example usage
+    import torch
+    model = PARTMaskedAutoEncoderViTFromDINO(embed_dim=384, depth=12, num_heads=6, patch_size=16, pos_embed_mode='learn', ls_init_values=None)
+    path = "artifacts/dino_deitsmall16_pretrain_full_checkpoint.pth"
+    ckpt = torch.load(path, map_location="cpu")
+    model.load_state_dict(ckpt)  

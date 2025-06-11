@@ -1,0 +1,127 @@
+# @package _global_
+defaults:
+  - /scheduler: cosine
+  - /optimizer: adamw
+  - override /data: coco
+  - override /model: pretrain/partmae_v6/vit_s_16_224
+  - override /data/transform: multi_crop_v4
+  - override /callbacks:
+    - common/step_checkpoint
+    - common/metric_logger
+    - common/iter_timer
+  - override /logger: wandb
+
+tags: ["posttrain", "coco", "partmae_v6", "dino", "vit_s_16"]
+
+seed: 12345
+float32_matmul_precision: "high"
+cudnn_benchmark: True
+
+callbacks:
+  checkpoint:
+    save_perm_every_n_steps: ${eval:10 * ${steps_per_epoch}}
+    save_temp_every_n_steps: ${steps_per_epoch}
+  metric_logger:
+    every_n_steps: 10
+  iter_timer:
+    every_n_steps: 10
+
+data:
+  transform:
+    distort_color: true
+    n_global_crops: 2
+    n_local_crops: 10
+
+trainer:
+  max_epochs: ???
+  accumulate_grad_batches: ${eval:${total_batch_size_per_gpu} // ${train_dataloader.batch_size}}
+  num_nodes: 1
+  devices: 1
+  gradient_clip_val: 0.3
+
+# mae/droppose blr
+# blr: 1.5e-4
+
+# dino blr
+# with gV=2, lV=10, this is effectively ~1.5e-4
+blr: 1e-4 
+ckpt_mode: backbone
+ckpt_path: ???
+total_images: 118287
+total_batch_size: ???
+total_batch_size_per_gpu: ${eval:${total_batch_size} // ${trainer.devices}}
+steps_per_epoch: ${eval:${total_images} // ${total_batch_size}}
+
+model:
+  _target_: src.models.components.converters.partmae_v6.dino.PARTMaskedAutoEncoderViTFromDINO
+  mask_ratio: 0.75
+  pos_mask_ratio: 0.75
+  sampler: stratified_jittered
+  criterion: l1
+  alpha_s: 1.0
+  num_views: ${eval:${data.transform.n_global_crops} + ${data.transform.n_local_crops}}
+  apply_tanh: false
+  pos_embed_mode: learn
+  ls_init_values: null # default for dinov2
+  num_register_tokens: 0
+
+  lambda_pose:  0
+
+  lambda_pstress:  0
+  lambda_psmooth: 0
+  lambda_pmatch: 0
+  lambda_pcr: 0
+
+  lambda_ccr: 0
+  lambda_cinv: 0
+
+  cr_eps: 0.5
+  sigma_yx: 0.2
+  sigma_hw: 1.0
+  beta_f: 0.1
+  beta_w: 3.0
+
+
+scheduler:
+  warmup_t: ??? 
+  t_initial: ??? # 800 epochs?
+  warmup_lr_init: 1e-7
+
+
+optimizer:
+  lr: ${eval:${blr} * ${total_batch_size} / 256}
+  weight_decay: 0.05
+  filter_bias_and_bn: true
+  param_group_fn:
+    _target_: src.utils.optimizer.make_param_group_fn
+    base_lr: ${..lr}
+    weight_decay: ${..weight_decay}
+    filter_bias_and_bn: ${..filter_bias_and_bn}
+    param_groups:
+      dino_head: ${eval:5e-5 * ${total_batch_size} / 256}
+      decoder: ${eval:5e-5 * ${total_batch_size} / 256}        
+
+train_dataloader:
+  pin_memory: true
+  batch_size: ???
+  num_workers: ???
+  drop_last: true
+  shuffle: true
+
+metric_collection:
+  _target_: src.models.components.metrics.partmae_v6.V6Metrics
+  nan_strategy: disable
+
+
+compile_kwargs:
+  fullgraph: True
+  mode: default
+compile_expr:
+  "torch._subclasses.fake_tensor.CONSTANT_NUMEL_LIMIT": 100000
+  "torch._dynamo.config.optimize_ddp": "python_reducer"
+  "torch._dynamo.config.compiled_autograd": True
+
+logger:
+  wandb:
+    project: "PART-posttrain"
+    group: "coco/partmae_v6/dino/vit_s_16"

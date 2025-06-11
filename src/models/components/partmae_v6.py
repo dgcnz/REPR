@@ -432,8 +432,8 @@ class PARTMaskedAutoEncoderViT(nn.Module):
 
         view_ids_N = torch.arange(V).repeat_interleave(self.Ns, output_size=N)
         view_ids_M = torch.arange(V).repeat_interleave(self.Ms, output_size=M)
-        self._register_or_overwrite_buffer("view_ids_N", view_ids_N)
-        self._register_or_overwrite_buffer("view_ids_M", view_ids_M)
+        self._register_or_overwrite_buffer("view_ids_N", view_ids_N.tolist())
+        self._register_or_overwrite_buffer("view_ids_M", view_ids_M.tolist())
 
     def _register_or_overwrite_buffer(self, name: str, value: int | list[int]):
         if hasattr(self, name):

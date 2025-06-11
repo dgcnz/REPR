@@ -37,6 +37,7 @@ class PatchMatchingLoss(torch.nn.Module):
     ) -> torch.Tensor:
         """
         Calculates loss by finding one global best non-self match for each anchor.
+        :param z: l2-normalized features from all views, shape [B, gV*gN + lV * lN, D]
         """
         B, N, D = z.shape
 
