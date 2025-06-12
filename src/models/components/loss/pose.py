@@ -63,3 +63,17 @@ class PoseLoss(nn.Module):
             "loss_pose_s": loss_s,
             "loss_pose": loss,
         }
+    
+
+class PoseHead(nn.Module):
+    def __init__(self, embed_dim: int, num_targets: int, apply_tanh: bool = False):
+        super().__init__()
+        self.linear = nn.Linear(embed_dim, num_targets, bias=False)
+        self.tanh = nn.Tanh() if apply_tanh else nn.Identity()
+
+    def forward(self, z):
+        pose_pred = self.linear(z)
+        # or equivalently:
+        # w * (z_i -  z_j) = pose_ij
+        pred_dT = self.tanh(pose_pred.unsqueeze(2) - pose_pred.unsqueeze(1))
+        return pred_dT

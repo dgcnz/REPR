@@ -20,27 +20,13 @@ from jaxtyping import Int, Float
 from src.models.components.heads.dino_head import DINOHead
 import logging
 from src.models.components.loss.match import PatchMatchingLoss
-from src.models.components.loss.pose import PoseLoss
+from src.models.components.loss.pose_v2 import PoseLoss, PoseHead
 from src.models.components.loss.patch_coding_rate import PatchCodingRateLossV2
 from src.models.components.loss.simdino_ref import CLSCodingRateLoss, CLSInvarianceLoss
 from src.models.components.loss.stress import PatchStressLoss
 
 
 logging.basicConfig(level=logging.INFO)
-
-
-class PoseHead(nn.Module):
-    def __init__(self, embed_dim: int, num_targets: int, apply_tanh: bool = False):
-        super().__init__()
-        self.linear = nn.Linear(embed_dim, num_targets, bias=False)
-        self.tanh = nn.Tanh() if apply_tanh else nn.Identity()
-
-    def forward(self, z):
-        pose_pred = self.linear(z)
-        # or equivalently:
-        # w * (z_i -  z_j) = pose_ij
-        pred_dT = self.tanh(pose_pred.unsqueeze(2) - pose_pred.unsqueeze(1))
-        return pred_dT
 
 
 def _drop_pos(
@@ -99,6 +85,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         decoder_depth: int = 8,
         decoder_num_heads: int = 16,
         decoder_from_proj: bool = False,
+        predict_uncertainty: bool = False,
         sampler: str = "random",
         num_views: int = 12,  # default is 2 global 10 local
         freeze_encoder: bool = False,
@@ -147,6 +134,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.pos_mask_ratio = pos_mask_ratio
         self.max_scale_ratio = max_scale_ratio
         self.num_register_tokens = num_register_tokens
+        self.pose_uncertainty = predict_uncertainty
         # cls token + register tokens
         self.num_prefix_tokens = 1 + num_register_tokens
         self.pos_embed_mode = pos_embed_mode
@@ -217,6 +205,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             embed_dim=decoder_embed_dim,
             num_targets=self.num_targets,
             apply_tanh=apply_tanh,
+            predict_uncertainty=predict_uncertainty,
         )
         self.dino_head = DINOHead(
             in_dim=embed_dim,
@@ -242,6 +231,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             alpha_t=alpha_t,
             alpha_s=alpha_s,
             alpha_ts=alpha_ts,
+            predict_uncertainty=predict_uncertainty,
         )
         # self._psmooth_loss = PatchSmoothnessLoss(sigma_yx=sigma_yx, sigma_hw=sigma_hw)
         self._pmatch_loss = PatchMatchingLoss(
@@ -255,7 +245,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         NUM_CHUNKS = 2
         self._pcr_loss = PatchCodingRateLossV2(
             embed_dim=proj_bottleneck_dim,
-            eps=cr_eps,
+            eps=0.5,
             pool_size=4,  # 4 * (2*49) = 392 patches > 256 (bottleneck_dim)
             num_chunks=NUM_CHUNKS,  # for stability
             gN=self._gN,
@@ -680,15 +670,15 @@ class PARTMaskedAutoEncoderViT(nn.Module):
     def forward_pose_loss(self, z, gt_dT, joint_ids_remove):
         if not self.lambdas.get("loss_pose", 0):
             return {}
-        V = self.num_views
         z = self.forward_decoder(z)
-        z_nopos = _drop_pos(z[:, V:, :], joint_ids_remove)
+        z_nopos = _drop_pos(z[:, self.num_views :, :], joint_ids_remove)
         pred_dT_nopos = self.pose_head(z_nopos)
         gt_dT_nopos = drop_pos_2d(gt_dT, joint_ids_remove)  # check
         return {
             **self._pose_loss(pred_dT_nopos, gt_dT_nopos, self._Ms),
-            "pred_dT": pred_dT_nopos,
-            "gt_dT": gt_dT_nopos,
+            "pred_dT": pred_dT_nopos[0].detach(),
+            "var_dT": pred_dT_nopos[1].detach() if self.pose_uncertainty else None,
+            "gt_dT": gt_dT_nopos.detach(),
         }
 
     def forward(

@@ -43,8 +43,12 @@ class V6Metrics(WrapperMetric):
                 "pred_ds_std": MeanMetric(**mean_kwargs),
                 "gt_dt_std": MeanMetric(**mean_kwargs),
                 "gt_ds_std": MeanMetric(**mean_kwargs),
-                "rmse_pred_dt": MeanSquaredError(squared=True, **mse_kwargs),
-                "rmse_pred_ds": MeanSquaredError(squared=True, **mse_kwargs),
+                "rmse_pred_dt": MeanSquaredError(squared=False, **mse_kwargs),
+                "rmse_pred_ds": MeanSquaredError(squared=False, **mse_kwargs),
+                "calib_dt_ratio": MeanMetric(**mean_kwargs),
+                "calib_ds_ratio": MeanMetric(**mean_kwargs),
+                "pred_var_dt_mean": MeanMetric(**mean_kwargs),
+                "pred_var_ds_mean": MeanMetric(**mean_kwargs),
                 ### gradient norms
                 "grad_mean_norm": MeanMetric(**mean_kwargs),
                 "grad_max_norm": MaxMetric(**mean_kwargs),
@@ -75,6 +79,25 @@ class V6Metrics(WrapperMetric):
             self.metrics["rmse_pred_ds"].update(
                 outputs["pred_dT"][..., 2:].flatten(), outputs["gt_dT"][..., 2:].flatten()
             )
+            if "var_dT" in outputs:
+                mu   = outputs["pred_dT"]          # [B, M, M, 4]
+                gt   = outputs["gt_dT"]            # [B, M, M, 4]
+                var  = torch.exp(outputs["var_dT"])# [B, M, M, 4]
+
+                # 1) Compute mean ratio per channel (dx, dy, dlogw, dlogh)
+                #    shape -> [4]
+                ratios = ((mu - gt).pow(2) / var).mean(dim=(0, 1, 2))
+
+                # 2) Aggregate into translation vs. scale
+                calib_dt = ratios[:2].mean()     # mean over dx, dy
+                calib_ds = ratios[2:].mean()     # mean over dlogw, dlogh
+
+                # 3) Update your two metrics in one go
+                self.metrics["calib_dt_ratio"].update(calib_dt)
+                self.metrics["calib_ds_ratio"].update(calib_ds)
+                self.metrics["pred_var_dt_mean"].update(var[..., :2].mean())
+                self.metrics["pred_var_ds_mean"].update(var[..., 2:].mean())
+        
 
         if "grad_norm" in outputs:
             self.metrics["grad_mean_norm"].update(outputs["grad_norm"].mean())
