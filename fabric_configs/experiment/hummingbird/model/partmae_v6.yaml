@@ -12,5 +12,5 @@ net:
       _target_: src.models.components.converters.timm.partmae_v6.preprocess
       state_dict:
         _target_: torch.load
-        f: ${ckpt_path}
+        f: ${model.ckpt_path}
 

@@ -86,10 +86,11 @@ def extract_timm_features(model: torch.nn.Module, imgs: torch.Tensor):
 def attach_artifact_if_missing(ckpt_path: Path, run_id: str, project: str) -> None:
     """Attach ckpt_path as an artifact to the original run if not present."""
     api = wandb.Api()
-    entity = os.environ.get("WANDB_ENTITY")
-    run_ref = f"{entity}/{project}/{run_id}" if entity else f"{project}/{run_id}"
+    entity = "dgcnz"
+    run_ref = f"{entity}/{project}/{run_id}" 
+    print(run_ref)
     run = api.run(run_ref)
-    artifact_name = f"model-{ckpt_path.stem}"
+    artifact_name = f"{run_id}-model-{ckpt_path.stem}"
     if any(a.name == artifact_name for a in run.logged_artifacts()):
         logging.warning("%s already logged", artifact_name)
         return
@@ -97,6 +98,7 @@ def attach_artifact_if_missing(ckpt_path: Path, run_id: str, project: str) -> No
     artifact = wandb.Artifact(artifact_name, type="model")
     artifact.add_reference(f"file://{ckpt_path.resolve()}", name=ckpt_path.name)
     resume.log_artifact(artifact)
+    print(f"LOGGED {artifact_name} to {run_ref}")
     resume.finish()
 
 
@@ -115,7 +117,7 @@ def validate_checkpoint(ckpt_path: Path) -> tuple[int, str, str, dict]:
     run_id = find_run_id(output_dir / "wandb")
     config_path = output_dir / ".hydra" / "config.yaml"
     project = read_wandb_project_from_config(config_path)
-    config = OmegaConf.to_container(OmegaConf.load(config_path), resolve=True)
+    config = OmegaConf.to_container(OmegaConf.load(config_path), resolve=False)
     return ckpt_step, run_id, project, config
 
 
@@ -132,7 +134,8 @@ def setup_wandb_logging(cfg: DictConfig):
         ckpt_step, run_id, project, config = validate_checkpoint(ckpt_path)
         attach_artifact_if_missing(ckpt_path, run_id, project)
         run = wandb.init(project="PART-hummingbird", group=run_id, config=config)
-        run.use_artifact(f"{run_id}/model-{ckpt_path.stem}:latest", type="model")
+        # TODO: stop hardcoding the artifact name prefix
+        run.use_artifact(f"dgcnz/PART-posttrain/{run_id}-model-{ckpt_path.stem}:v0", type="model")
         return run, ckpt_step
     raise ValueError(f"unknown ckpt_mode {ckpt_mode}")
 
@@ -142,7 +145,7 @@ def main(cfg: DictConfig):
     run, step = setup_wandb_logging(cfg)
 
     # Build model from config
-    model = instantiate(cfg.model.net, _convert_="all")
+    model = instantiate(cfg.model, _convert_="all")["net"]
     model = model.eval().to(cfg.device)
 
     # Extract metadata
