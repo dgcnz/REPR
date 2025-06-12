@@ -1,0 +1,10 @@
+ckpt_mode: backbone
+
+net:
+  _target_: timm.create_model
+  model_name: vit_small_patch14_dinov2
+  pretrained: True
+  pretrained_strict: True
+  pretrained_cfg_overlay:
+    hf_hub_id: FunAILab/NeCo
+    hf_hub_filename: vit-small/dinov2-architectures/neco_on_dinov2_vit14_teacher.ckpt
