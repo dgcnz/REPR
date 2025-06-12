@@ -8,7 +8,6 @@
 # data=voc \
 # model.pretrained_cfg_overlay.state_dict.state_dict.f=$(ls -d outputs/2025-05-29/12-10-52/*  | grep epoch | paste -sd, -)
 
-import os
 import re
 import logging
 from pathlib import Path
@@ -133,7 +132,12 @@ def setup_wandb_logging(cfg: DictConfig):
         ckpt_path = Path(cfg.model.ckpt_path)
         ckpt_step, run_id, project, config = validate_checkpoint(ckpt_path)
         attach_artifact_if_missing(ckpt_path, run_id, project)
-        run = wandb.init(project="PART-hummingbird", group=run_id, config=config)
+        run = wandb.init(
+            project="PART-hummingbird",
+            group=run_id,
+            config=config,
+            name=f"{run_id}-{ckpt_step:07d}",
+        )
         # TODO: stop hardcoding the artifact name prefix
         run.use_artifact(f"dgcnz/PART-posttrain/{run_id}-model-{ckpt_path.stem}:v0", type="model")
         return run, ckpt_step
