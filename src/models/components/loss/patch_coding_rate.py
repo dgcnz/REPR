@@ -36,7 +36,7 @@ class PatchCodingRateLoss(nn.Module):
 
         # 4) final γ‐scaling
         gamma = (D + T) / (D * T)
-        return -expa * gamma
+        return {"loss_pcr": -expa * gamma}
 
 
 class PatchCodingRateLossV2(nn.Module):
@@ -87,4 +87,4 @@ class PatchCodingRateLossV2(nn.Module):
         expa = batched_logdet(self.I, z, alpha, num_chunks=self.num_chunks)
 
         # 4) final γ‐scaling
-        return -expa * gamma
+        return {"loss_pcr": -expa * gamma}

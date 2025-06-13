@@ -56,6 +56,9 @@ def _freeze_module(module: nn.Module) -> nn.Module:
     module._no_grad_wrapped = True  # type: ignore[attr-defined]
     return module
 
+def noop(*args, **kwargs):
+    return dict()
+
 
 SAMPLERS = {
     "random": random_sampling,
@@ -121,6 +124,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         ls_init_values: float = 0.0,  # 1e-5 for dinov2
         pos_embed_mode: str = "sincos",  # "sincos" or "learn"
         # ..
+        bypass_loss: bool = False,  # bypass loss modules
     ):
         """ """
         super().__init__()
@@ -139,6 +143,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.num_prefix_tokens = 1 + num_register_tokens
         self.pos_embed_mode = pos_embed_mode
         self.grid_size = _pair(self.img_size // self.patch_size)
+        self.bypass_loss = bypass_loss
         assert pos_embed_mode in ("sincos", "learn")
 
         self.patch_embed = OffGridPatchEmbed(
@@ -267,6 +272,8 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             if _lambda == 0:
                 module_name = f"_{key.removeprefix('loss_')}_loss"
                 self.freeze(module_name)
+                if self.bypass_loss:
+                    self.bypass(module_name)
         # It's important to ensure that expansion and compression losses are complementary
         # otherwise representational collapse can happen
         # assert lambda_psmooth == lambda_pcr
@@ -293,6 +300,18 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         if module == "_pose_loss":
             for p in self.get_decoder_params():
                 p.requires_grad_(False)
+
+    def bypass(self, module: str) -> None:
+        """Replace the forward pass of ``module`` with a no-op."""
+        if not hasattr(self, module):
+            raise ValueError(f"Unknown module '{module}' to bypass")
+        mod = getattr(self, module)
+        _freeze_module(mod)
+        if module == "_pose_loss":
+            self.forward_pose_loss = noop
+        
+        mod.forward = noop
+        logging.info(f"Bypassing module: {module}")
 
     def get_encoder_params(self):
         """Yield parameters of the encoder portion of the model."""
@@ -718,14 +737,14 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         losses = self.forward_pose_loss(dec_input, gt_dT, joint_ids_remove)
         # joint_cls: [B, V, D]
         # teacher is just the cls of the global views
-        losses["loss_cinv"] = self._cinv_loss(
+        losses.update(self._cinv_loss(
             proj_cls, proj_cls[:, : self._gV].detach()
-        )
-        losses["loss_ccr"] = self._ccr_loss(proj_cls)
+        ))
+        losses.update(self._ccr_loss(proj_cls))
         # losses["loss_psmooth"] = self._psmooth_loss(proj_patches, gt_dT)
         # losses["loss_pstress"] = self._pstress_loss(proj_patches, gt_dT)
         losses.update(self._pmatch_loss(proj_patches, gt_dT))
-        losses["loss_pcr"] = self._pcr_loss(proj_patches)
+        losses.update(self._pcr_loss(proj_patches))
         # losses["loss_cosa"] = self._cosa_loss(pred_dT_nopos, gt_dT_nopos)
 
         loss = torch.stack(

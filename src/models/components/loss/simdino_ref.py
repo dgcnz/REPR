@@ -28,7 +28,7 @@ class CLSCodingRateLoss(nn.Module):
         loss *= (D + B) / (D * B)
         # the balancing factor gamma, you can also use the next line. This is ultimately a heuristic, so feel free to experiment.
         # loss *= ((self.eps *  B) ** 0.5 / D)
-        return -loss
+        return {"loss_ccr": -loss}
 
 
 class CLSInvarianceLoss(nn.Module):
@@ -47,4 +47,4 @@ class CLSInvarianceLoss(nn.Module):
         n_loss_terms = len(z_tea) * len(z_stu) - min(len(z_tea), len(z_stu))
         # Sum the cosine similarities
         comp_loss = sim.mean(2).sum() / n_loss_terms
-        return -comp_loss  # negative because we want to maximize similarity
+        return {"loss_cinv": -comp_loss}  # negative because we want to maximize similarity
