@@ -337,14 +337,13 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         if self.register_tokens is not None:
             nn.init.normal_(self.register_tokens, std=1e-6)
         self.apply(self._init_weights)
-        # TODO: should i really initialize pose_head.linear?
-
-    # nn.init.kaiming_uniform_(self.pose_head.linear.weight, a=4)
+        self.pose_head.initialize_weights()
 
     def _init_weights(self, m):
         """
         ViT weight initialization, original timm impl (for reproducibility)
         """
+        logging.info("Initializing weights for %s", m.__class__.__name__)
         if isinstance(m, nn.Linear):
             nn.init.trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:

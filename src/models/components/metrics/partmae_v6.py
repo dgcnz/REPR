@@ -86,7 +86,8 @@ class V6Metrics(WrapperMetric):
 
                 # 1) Compute mean ratio per channel (dx, dy, dlogw, dlogh)
                 #    shape -> [4]
-                ratios = ((mu - gt).pow(2) / var).mean(dim=(0, 1, 2))
+                # assume laplace
+                ratios = ((mu - gt).abs() / var).mean(dim=(0, 1, 2))
 
                 # 2) Aggregate into translation vs. scale
                 calib_dt = ratios[:2].mean()     # mean over dx, dy

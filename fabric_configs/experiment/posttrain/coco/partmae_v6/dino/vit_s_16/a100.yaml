@@ -28,7 +28,7 @@ model:
   decoder_embed_dim: 256
   decoder_from_proj: true
   decoder_depth: 2
-  cr_eps: 0.1
+  cr_eps: 0.05
 
 callbacks:
   metric_logger:
@@ -37,7 +37,7 @@ callbacks:
     every_n_steps: 10
 
 scheduler:
-  warmup_t: ${eval:5 * ${steps_per_epoch}} # 5 epochs
+  warmup_t: ${eval:10 * ${steps_per_epoch}} # 10 epochs
   t_initial: ${eval:${trainer.max_epochs} * ${steps_per_epoch}} # 100 epochs
 
 data:

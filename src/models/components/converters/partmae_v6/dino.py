@@ -27,6 +27,9 @@ class PARTMaskedAutoEncoderViTFromDINO(PARTMaskedAutoEncoderViT):
             "mask_pos_token",
             "segment_embed",
             "pose_head.linear.weight",
+            "pose_head.mu.weight",
+            "pose_head.logvar.weight",
+            "pose_head.logvar.bias",
             "_patch_loss.sigma",
         ]
         other_miss = [
