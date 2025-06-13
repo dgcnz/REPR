@@ -49,6 +49,8 @@ class V6Metrics(WrapperMetric):
                 "calib_ds_ratio": MeanMetric(**mean_kwargs),
                 "pred_var_dt_mean": MeanMetric(**mean_kwargs),
                 "pred_var_ds_mean": MeanMetric(**mean_kwargs),
+                "pred_var_dt_std": MeanMetric(**mean_kwargs),
+                "pred_var_ds_std": MeanMetric(**mean_kwargs),
                 ### gradient norms
                 "grad_mean_norm": MeanMetric(**mean_kwargs),
                 "grad_max_norm": MaxMetric(**mean_kwargs),
@@ -79,7 +81,7 @@ class V6Metrics(WrapperMetric):
             self.metrics["rmse_pred_ds"].update(
                 outputs["pred_dT"][..., 2:].flatten(), outputs["gt_dT"][..., 2:].flatten()
             )
-            if "var_dT" in outputs:
+            if "var_dT" in outputs and outputs["var_dT"] is not None:
                 mu   = outputs["pred_dT"]          # [B, M, M, 4]
                 gt   = outputs["gt_dT"]            # [B, M, M, 4]
                 var  = torch.exp(outputs["var_dT"])# [B, M, M, 4]
@@ -98,6 +100,8 @@ class V6Metrics(WrapperMetric):
                 self.metrics["calib_ds_ratio"].update(calib_ds)
                 self.metrics["pred_var_dt_mean"].update(var[..., :2].mean())
                 self.metrics["pred_var_ds_mean"].update(var[..., 2:].mean())
+                self.metrics["pred_var_dt_std"].update(var[..., :2].std())
+                self.metrics["pred_var_ds_std"].update(var[..., 2:].std())
         
 
         if "grad_norm" in outputs:

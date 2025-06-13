@@ -28,7 +28,7 @@ model:
   decoder_embed_dim: 256
   decoder_from_proj: true
   decoder_depth: 2
-  cr_eps: 0.1
+  cr_eps: 0.05
 
 callbacks:
   checkpoint:
