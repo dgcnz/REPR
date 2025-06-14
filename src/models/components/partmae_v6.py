@@ -362,7 +362,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         """
         ViT weight initialization, original timm impl (for reproducibility)
         """
-        logging.info("Initializing weights for %s", m.__class__.__name__)
         if isinstance(m, nn.Linear):
             nn.init.trunc_normal_(m.weight, std=0.02)
             if m.bias is not None:
@@ -437,8 +436,8 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             self._register_or_overwrite_buffer(k, v)
             setattr(self, f"_{k}", v)
 
-        view_ids_N = torch.arange(V).repeat_interleave(self.Ns, output_size=N)
-        view_ids_M = torch.arange(V).repeat_interleave(self.Ms, output_size=M)
+        view_ids_N = torch.arange(V, device=self.Ns.device).repeat_interleave(self.Ns, output_size=N)
+        view_ids_M = torch.arange(V, device=self.Ms.device).repeat_interleave(self.Ms, output_size=M)
         self._register_or_overwrite_buffer("view_ids_N", view_ids_N.tolist())
         self._register_or_overwrite_buffer("view_ids_M", view_ids_M.tolist())
 

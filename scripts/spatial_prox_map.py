@@ -1,16 +1,17 @@
 import torch
-import torch.nn.functional as F
 import numpy as np
 from PIL import Image
+from pathlib import Path
 import matplotlib.pyplot as plt
 import gradio as gr
 from gradio_patch_selection import PatchSelector
 import torchvision.transforms as T
 from omegaconf import OmegaConf
 import hydra
+import logging
+from torch.utils._pytree import tree_map_only
 
-# Import the PART MAE ViT model
-from src.models.components.partmae_v6 import PART_mae_vit_base_patch16
+logging.basicConfig(level=logging.INFO)
 
 # Configuration
 PATCH_SIZE = 16  # must match model.patch_size
@@ -20,52 +21,40 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Preprocessing: convert to tensor, normalize with ImageNet stats
 transform = T.Compose(
     [
-        # T.Resize(IMG_SIZE), # Removed as transform should not handle resizing/cropping
-        # T.CenterCrop(IMG_SIZE), # Removed as redundant and transform should not handle resizing/cropping
         T.ToTensor(),
         T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
     ]
 )
 
 
-def load_model():
-    V = 2
-    RUN_ID = "nw6nhpa2"
-    EPOCH = "0199"
-    cfg = OmegaConf.load(f"artifacts/model-{RUN_ID}:v0/config.yaml")
-    ckpt = torch.load(f"artifacts/model-{RUN_ID}:v0/epoch_{EPOCH}.ckpt")["model"]
-    ckpt["pose_head.linear.weight"] = ckpt.pop("decoder_pred.weight")
-    ckpt["_patch_loss.sigma"] = torch.tensor([0.1, 0.1, 0.1, 0.1])
-    # ckpt["segment_embed"] = ckpt["segment_embed"][:V]
-    ckpt["segment_embed"] = torch.zeros_like(ckpt["segment_embed"])[:V]
-
-    cfg["model"]["segment_embed_mode"] = (
-        "permute" if cfg["model"].pop("permute_segment_embed") else "fixed"
-    )
+def load_model(run_folder: Path, ckpt_name: str) -> torch.nn.Module:
+    """Load the pretrained PART model for inference."""
+    cfg = OmegaConf.load(run_folder / ".hydra" / "config.yaml")
+    ckpt = torch.load(run_folder / ckpt_name)["model"]
     model = hydra.utils.instantiate(
         cfg["model"],
         _target_="src.models.components.partmae_v6.PARTMaskedAutoEncoderViT",
-        verbose=True,
-        num_views=V,
+        num_views=2,  # we're using 2 views for this example
+        sampler="ongrid_canonical",
+        mask_ratio=0.0,
+        pos_mask_ratio=1.0,
     )
     model.load_state_dict(ckpt, strict=True)
     return model
 
 
-# Initialize the model: create default, then configure sampler and masking
-# model = PART_mae_vit_base_patch16(num_views=2).to(DEVICE)
-model = load_model().to(DEVICE).eval()
-# Use update_conf instead of constructor overrides
-model.update_conf(sampler="ongrid_canonical", mask_ratio=0.0, pos_mask_ratio=1.0)
-
+RUN_FOLDER = Path("outputs/2025-06-13/19-56-13")
+CKPT_NAME = "last.ckpt"
+# Initialize the model and configure sampler
+model = load_model(RUN_FOLDER, CKPT_NAME).to(DEVICE).eval()
 
 
 def compute_pred_dT_full_v2(pilA: Image.Image, pilB: Image.Image):
     # Preprocess and batch
-    tA = transform(pilA).unsqueeze(0).to(DEVICE)
-    tB = transform(pilB).unsqueeze(0).to(DEVICE)
-    x = [tA, tB]
-    params = [torch.randn(1, 8, device=DEVICE), torch.randn(1, 8, device=DEVICE)]
+    tA = transform(pilA).to(DEVICE)
+    tB = transform(pilB).to(DEVICE)
+    x = [torch.stack([tA, tB]).unsqueeze(0)]  # Stack images into a batch
+    params = [torch.randn(1, 2, 8, device=DEVICE)]
 
     with torch.no_grad():
         out = model(x, params)
@@ -111,11 +100,14 @@ def overlay_distance_heatmap(
 # Accepts PatchSelector annotation dict and Image B (could be numpy or PIL)
 def update_overlay(annotation: dict, imageB):
     # annotation: {'image': array or PIL, 'patchIndex': int}
+    logging.info(
+        f"Received annotation : {tree_map_only(np.ndarray, lambda x: x.shape, annotation)}"
+    )
     if annotation is None or imageB is None:
         return None, "Please upload both images and select a patch."
 
     imgA_data = annotation.get("image", None)
-    idx = annotation.get("patchIndex", None)
+    idx = annotation.get("patch_index", None)
     if imgA_data is None or idx is None:
         return None, "No patch selected."
 
@@ -134,7 +126,7 @@ def update_overlay(annotation: dict, imageB):
     elif isinstance(imageB, Image.Image):
         pilB = imageB
     else:
-        pilB = Image.open(imageB) # pilB is at original resolution
+        pilB = Image.open(imageB)  # pilB is at original resolution
 
     # Resize pilB to IMG_SIZE. This is used for model input and overlay.
     pilA = pilA.resize((IMG_SIZE, IMG_SIZE), Image.LANCZOS)
@@ -148,6 +140,7 @@ def update_overlay(annotation: dict, imageB):
     overlay = overlay_distance_heatmap(pilB, pred_dT_full, N, idx)
     info = f"Patch A index: {idx} → grid {int(np.sqrt(N))}×{int(np.sqrt(N))}"
     return overlay, info
+
 
 def resize_img(img):
     # Resize the image to the desired size
@@ -169,7 +162,12 @@ with demo:
     with gr.Row():
         with gr.Column():
             patch_selector = PatchSelector(
-                {"image": Image.open("artifacts/dog.webp").resize((IMG_SIZE, IMG_SIZE), Image.LANCZOS), "patchIndex": 0},
+                {
+                    "image": Image.open("artifacts/samoyed.jpg").resize(
+                        (IMG_SIZE, IMG_SIZE), Image.LANCZOS
+                    ),
+                    "patchIndex": 0,
+                },
                 img_size=IMG_SIZE,
                 patch_size=PATCH_SIZE,
                 show_grid=True,
@@ -181,21 +179,20 @@ with demo:
             imageB_input = gr.Image(
                 type="pil",
                 label="Image B",
-                value=Image.open("artifacts/human-right.jpg").resize((IMG_SIZE, IMG_SIZE), Image.LANCZOS),
+                value=Image.open("artifacts/dog.jpg").resize(
+                    (IMG_SIZE, IMG_SIZE), Image.LANCZOS
+                ),
                 # width=IMG_SIZE,
                 # height=IMG_SIZE,
             )
             overlay_output = gr.Image(type="pil", label="Heatmap Overlay")
 
-    imageB_input.upload(
-        fn=resize_img,
-        inputs=imageB_input,
-        outputs=imageB_input,
-    )
+    imageB_input.upload(fn=resize_img, inputs=imageB_input, outputs=imageB_input)
 
     # Allow uploading a new image into the PatchSelector
     patch_selector.upload(
-        fn=lambda img: {"image": img, "patchIndex": 0},
+        # fn=lambda img: {"image": img, "patchIndex": 0},
+        fn=lambda inputs: inputs,
         inputs=[patch_selector],
         outputs=[patch_selector],
     )
