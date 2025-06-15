@@ -131,7 +131,7 @@ def setup_wandb_logging(cfg: DictConfig):
     if ckpt_mode == "checkpoint":
         ckpt_path = Path(cfg.model.ckpt_path)
         ckpt_step, run_id, project, config = validate_checkpoint(ckpt_path)
-        attach_artifact_if_missing(ckpt_path, run_id, project)
+        # attach_artifact_if_missing(ckpt_path, run_id, project)
         run = wandb.init(
             project="PART-hummingbird",
             group=run_id,
@@ -139,7 +139,7 @@ def setup_wandb_logging(cfg: DictConfig):
             name=f"{run_id}-{ckpt_step:07d}",
         )
         # TODO: stop hardcoding the artifact name prefix
-        run.use_artifact(f"dgcnz/PART-posttrain/{run_id}-model-{ckpt_path.stem}:v0", type="model")
+        # run.use_artifact(f"dgcnz/PART-posttrain/{run_id}-model-{ckpt_path.stem}:v0", type="model")
         return run, ckpt_step
     raise ValueError(f"unknown ckpt_mode {ckpt_mode}")
 
