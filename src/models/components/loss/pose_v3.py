@@ -1,11 +1,9 @@
 import torch
 from torch import nn
 from torch import Tensor
-import torch.nn.functional as F
 import itertools
 import math
-import wandb
-from typing import Literal, Optional
+from typing import Literal
 
 
 class PoseHead(nn.Module):
