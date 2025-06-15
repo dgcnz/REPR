@@ -18,6 +18,7 @@ dependencies = [
     "matplotlib>=3.9.0",
     "mediapy>=1.2.2",
     "omegaconf>=2.3.0",
+    "openmim>=0.3.9",
     "parameterized-transforms",
     "plotly>=6.1.0b0",
     "protobuf==6.30.0",
@@ -62,6 +63,7 @@ gradio-patch-selection = { git = "https://github.com/dgcnz/gradio_patch_selector
 
 [dependency-groups]
 dev = [
+    "faiss-gpu-cu12>=1.11.0",
     "gradio>=5.14.0",
     "gradio-patch-selection",
     "ipykernel>=7.0.0a1",
