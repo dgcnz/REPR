@@ -26,11 +26,7 @@ class PARTMaskedAutoEncoderViTFromDINO(PARTMaskedAutoEncoderViT):
             "decoder",
             "mask_pos_token",
             "segment_embed",
-            "pose_head.linear.weight",
-            "pose_head.mu.weight",
-            "pose_head.logvar.weight",
-            "pose_head.logvar.bias",
-            "_patch_loss.sigma",
+            "pose_head",
         ]
         other_miss = [
             k for k in miss if not any(k.startswith(p) for p in allowed_prefixes)
