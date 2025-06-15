@@ -11,11 +11,8 @@ ckpt_path: artifacts/dino_deitsmall16_pretrain_full_checkpoint.pth
 blr: 5e-7
 
 trainer:
-  max_epochs: 100
+  max_epochs: 150 # ~20h on 1xA100
   accelerator: gpu
-  # max_epochs: 200
-  # accelerator: gpu
-  # strategy: ddp
   num_nodes: 1
   devices: 1
 
@@ -35,10 +32,13 @@ callbacks:
     every_n_steps: 10
   iter_timer:
     every_n_steps: 10
+  checkpoint:
+    save_perm_every_n_steps: ${eval:25 * ${steps_per_epoch}}
+    save_temp_every_n_steps: ${steps_per_epoch}
 
 scheduler:
   warmup_t: ${eval:10 * ${steps_per_epoch}} # 10 epochs
-  t_initial: ${eval:${trainer.max_epochs} * ${steps_per_epoch}} # 100 epochs
+  t_initial: ${eval:${trainer.max_epochs} * ${steps_per_epoch}} # 150 epochs
 
 data:
   root: /scratch-nvme/ml-datasets/coco/train/data
