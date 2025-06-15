@@ -13,9 +13,6 @@ class PoseHead(nn.Module):
       'none'       = mu_ij = W(z_i - z_j), no disp
       'additive'   = + per-token disp σ_i²: disp_ij = σ_i² + σ_j²
       'correlated' = additive + corr term: disp_ij = σ_i²+σ_j² - 2ρ_ij σ_i σ_j
-
-    For correlated mode we want:
-    - At initialization, E[p_ij] ≈ 0 and only  p_ij = 1 when i=j.
     """
 
     def __init__(
@@ -124,7 +121,9 @@ class PoseLoss(nn.Module):
         alpha_t: float = 0.5,
         alpha_s: float = 0.75,
         alpha_ts: float = 0.5,
-        uncertainty_mode: Literal["none", "additive", "correlated", "correlated_proj"] = "none",
+        uncertainty_mode: Literal[
+            "none", "additive", "correlated", "correlated_proj"
+        ] = "none",
     ):
         super().__init__()
         assert criterion in ("mse", "l1")
