@@ -55,7 +55,9 @@ def knn_eval(model, train_loader, val_loader, k_list, temperature, device):
 @hydra.main(version_base="1.3", config_path="../fabric_configs/experiment/knn", config_name="config")
 def main(cfg: DictConfig) -> None:
     device = torch.device(cfg.device)
-    model = instantiate(cfg.model, _convert_="all").to(device).eval()
+    model_cfg = instantiate(cfg.model, _convert_="all")
+    model = model_cfg["net"] if isinstance(model_cfg, dict) and "net" in model_cfg else model_cfg
+    model = model.to(device).eval()
 
     train_ds = instantiate(cfg.data.train, _convert_="all")
     val_ds = instantiate(cfg.data.val, _convert_="all")
