@@ -17,7 +17,7 @@ import torch
 import wandb
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
-from hbird.hbird_eval import hbird_evaluation
+from hbird.hbird_eval import hbird_evaluation # type: ignore 
 
 import timm  # noqa: F401
 from src.utils.io import find_run_id, read_wandb_project_from_config
