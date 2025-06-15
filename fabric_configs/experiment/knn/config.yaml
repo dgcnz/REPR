@@ -5,7 +5,7 @@ defaults:
   - model: partmae_v6
   - data: imagenet
 
-batch_size: 128
+batch_size: 1024
 device: cuda
 nb_knn: [20]
 temperature: 0.07

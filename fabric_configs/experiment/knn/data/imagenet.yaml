@@ -4,11 +4,11 @@ defaults:
 train:
   _target_: torchvision.datasets.ImageFolder
   root: "/mnt/sdb1/datasets/imagenet/train"
-  transform: ${transform}
+  transform: ${data.transform}
 val:
   _target_: torchvision.datasets.ImageFolder
   root: "/mnt/sdb1/datasets/imagenet/val"
-  transform: ${transform}
+  transform: ${data.transform}
 num_workers: 0
 pin_memory: True
 
