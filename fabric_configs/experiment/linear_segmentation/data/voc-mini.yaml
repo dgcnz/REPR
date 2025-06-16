@@ -1,0 +1,4 @@
+dataset_name: "voc"
+data_dir: "/mnt/sdb1/datasets/voc-mini"
+train_fs: "/mnt/sdb1/datasets/voc-mini/VOCSegmentation/sets/trainaug.txt"
+val_fs:   "/mnt/sdb1/datasets/voc-mini/VOCSegmentation/sets/val.txt"

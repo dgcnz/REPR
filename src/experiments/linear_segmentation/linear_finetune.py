@@ -18,9 +18,9 @@ from lightning.pytorch.loggers import WandbLogger
 import wandb
 import pytorch_lightning as pl
 
-from data.VOCdevkit.vocdata import VOCDataModule
-from data.coco.coco_data_module import CocoDataModule
-from experiments.utils.neco_utils import PredsmIoU
+from src.data.VOCdevkit.vocdata import VOCDataModule
+from src.data.coco.coco_data_module import CocoDataModule
+from src.experiments.utils.neco_utils import PredsmIoU
 from src.experiments.utils.linear_finetuning_transforms import (
     Compose,
     Normalize,
@@ -78,8 +78,6 @@ def main(cfg: DictConfig) -> None:
         run = wandb.init(project="PART-linear-segmentation")
         run_id = run.id
         step = 0
-        run.name = f"{run_id}-{step:07d}"
-        run.group = run_id
 
     run_name = run.name
     run.config.update({"tags": cfg.tags}, allow_val_change=True)
@@ -263,10 +261,7 @@ class LinearFinetune(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(ignore=["net"])
         self.model = net
-        try:
-            in_ch = net.embed_dim
-        except AttributeError:
-            in_ch = net.num_features
+        in_ch = net.embed_dim
         self.finetune_head = nn.Conv2d(in_ch, num_classes, 1)
 
         self.criterion = torch.nn.CrossEntropyLoss(ignore_index=ignore_index)

@@ -9,11 +9,11 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torchvision.transforms.functional import InterpolationMode
 
-from data.VOCdevkit.vocdata import VOCDataModule
-from data.coco.coco_data_module import CocoDataModule
-from data.cityscapes.cityscapes_data import CityscapesDataModule
-from data.ade20k.ade20kdata import Ade20kDataModule
-from experiments.utils.neco_utils import PredsmIoU
+from src.data.VOCdevkit.vocdata import VOCDataModule
+from src.data.coco.coco_data_module import CocoDataModule
+from src.data.cityscapes.cityscapes_data import CityscapesDataModule
+from src.data.ade20k.ade20kdata import Ade20kDataModule
+from src.experiments.utils.neco_utils import PredsmIoU
 from src.experiments.utils.linear_finetuning_transforms import SepTransforms
 from src.experiments.utils.timm_seg_utils import extract_feature_map
 

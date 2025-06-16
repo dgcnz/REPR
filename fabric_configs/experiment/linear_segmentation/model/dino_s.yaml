@@ -3,3 +3,4 @@ net:
   _target_: timm.create_model
   model_name: vit_small_patch16_224.dino
   pretrained: true
+  img_size: 448

@@ -1,4 +1,4 @@
 dataset_name: "voc"
-data_dir: "/mnt/sdb1/datasets/voc/VOCSegmentation"
+data_dir: "/mnt/sdb1/datasets/voc"
 train_fs: "/mnt/sdb1/datasets/voc/VOCSegmentation/sets/trainaug.txt"
 val_fs:   "/mnt/sdb1/datasets/voc/VOCSegmentation/sets/val.txt"
