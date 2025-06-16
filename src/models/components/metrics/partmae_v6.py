@@ -55,6 +55,7 @@ class V6Metrics(WrapperMetric):
                 "loss_pose_simlog_std": MeanMetric(**mean_kwargs),
                 "loss_pose_disp_T_mean": MeanMetric(**mean_kwargs),
                 "loss_pose_disp_T_std": MeanMetric(**mean_kwargs),
+                "loss_pose_gate_mult": MeanMetric(**mean_kwargs),
                 ### gradient norms
                 "grad_mean_norm": MeanMetric(**mean_kwargs),
                 "grad_max_norm": MaxMetric(**mean_kwargs),

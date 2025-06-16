@@ -44,13 +44,22 @@ class PoseHead(nn.Module):
         # dispersion head(s)
         self.min_logdisp = min_logdisp
         self.max_logdisp = max_logdisp
+        gate_in_dim = self.embed_dim if uncertainty_mode == "correlated" else gate_dim
         if uncertainty_mode in ("additive", "correlated", "correlated_proj"):
             # per-token log-dispersion
             self.disp_proj = nn.Linear(embed_dim, num_targets, bias=True)
-        if uncertainty_mode == "correlated":
-            self.gate_proj = nn.Linear(self.embed_dim, self.gate_dim, bias=False)
-        if uncertainty_mode == "correlated_proj":
-            self.gate_proj = nn.Linear(self.proj_embed_dim, self.gate_dim, bias=False)
+
+        if uncertainty_mode in ["correlated", "correlated_proj"]:
+            if gate_in_dim == 0:
+                self.gate_proj = nn.Identity()
+                self.beta = 100
+                self.gate_init = math.log(5e-3)
+                self.gate_mult = nn.Parameter(
+                    torch.tensor(self.gate_init / self.beta), requires_grad=True
+                )
+            else:
+                self.gate_proj = nn.Linear(gate_in_dim, self.gate_dim, bias=False)
+                self.gate_mult = nn.Parameter(torch.tensor(0), requires_grad=False)
 
         self.initialize_weights()
 
@@ -66,7 +75,8 @@ class PoseHead(nn.Module):
             # nn.init.normal_(self.disp_proj.weight, mean=0.0, std=0.01)
             nn.init.zeros_(self.disp_proj.weight)
             nn.init._no_grad_fill_(self.disp_proj.bias, init_lv)
-            nn.init._no_grad_normal_(self.gate_proj.weight, mean=0.0, std=0.001)
+            if self.gate_dim:
+                nn.init._no_grad_normal_(self.gate_proj.weight, mean=0.0, std=0.001)
 
     def forward(self, z: Tensor, proj: Tensor):
         """
@@ -98,11 +108,14 @@ class PoseHead(nn.Module):
             h_gate = self.gate_proj(gate_in)  # [B, M, gate_dim]
             # Use bmm for explicit batched matrix multiplication
             similarity_logits = torch.bmm(h_gate, h_gate.transpose(-1, -2))  # [B, M, M]
+            gate_mult = torch.exp(self.beta * self.gate_mult)
+            similarity_logits = similarity_logits * gate_mult
             similarity_logits = similarity_logits.unsqueeze(-1)
             # Broadcast for K: [B, M, M, 1]
             logdisp_pair = logdisp_pair - similarity_logits
             out["loss_pose_simlog_mean"] = similarity_logits.detach().mean()
             out["loss_pose_simlog_std"] = similarity_logits.detach().std()
+            out["loss_pose_gate_mult"] = gate_mult.detach()
 
         out["disp_dT"] = torch.exp(logdisp_pair)  # [B, M, M, K]
         return out
