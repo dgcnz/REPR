@@ -29,26 +29,15 @@ def eval_bulk(cfg: DictConfig) -> None:
     data_dir = cfg.data.data_dir
     num_classes = cfg.num_classes
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    miou_metric = PredsmIoU(num_classes, num_classes)
 
     model: torch.nn.Module = instantiate(cfg.model.net)
     model.eval().to(device)
-
-    finetune_head = nn.Conv2d(model.embed_dim, num_classes, 1)
 
     if ckpt_path_backbone:
         state = torch.load(ckpt_path_backbone, map_location="cpu")
         msg = model.load_state_dict(state, strict=False)
         print(msg)
 
-    # load linear head
-    state_dict = torch.load(ckpt_path_head)
-    weights = {k.replace("finetune_head.", ""): v for k, v in state_dict.items()}
-    msg = finetune_head.load_state_dict(weights, strict=False)
-    print(msg)
-    assert len(msg[0]) == 0
-    finetune_head.eval()
-    finetune_head.to(device)
 
     # Init transforms and data
     val_image_transforms = T.Compose(
@@ -134,6 +123,16 @@ def eval_bulk(cfg: DictConfig) -> None:
         )
     else:
         raise ValueError(f"{dataset_name} not supported as dataset")
+
+    finetune_head = nn.Conv2d(model.embed_dim, num_classes, 1)
+    state_dict = torch.load(ckpt_path_head)
+    weights = {k.replace("finetune_head.", ""): v for k, v in state_dict.items()}
+    msg = finetune_head.load_state_dict(weights, strict=False)
+    print(msg)
+    assert len(msg[0]) == 0
+    finetune_head.eval()
+    finetune_head.to(device)
+    miou_metric = PredsmIoU(num_classes, num_classes)
 
     data_module.setup()
 
