@@ -56,12 +56,14 @@ def train_one_epoch(
     # Convert dataloader to iterator to handle manual batch fetching
     data_iter = iter(data_loader)
 
+    nan_counter = 0
     with tqdm(range(n_steps), **tqdm_kwargs) as pbar:
         for step in pbar:
             fabric.call("on_train_batch_start", **ctx(global_step))
             torch.compiler.cudagraph_mark_step_begin()
 
             optimizer.zero_grad()
+            nan_flag = False
             # Accumulate gradients over multiple batches
             for i in range(accum_iter):
                 batch = next(data_iter)
@@ -71,11 +73,22 @@ def train_one_epoch(
                 fabric.call("on_train_forward_end", **ctx(global_step))
 
                 loss = outputs["loss"] / accum_iter
+                if torch.isnan(loss) or torch.isinf(loss):
+                    nan_flag = True
+                    break
 
+                nan_counter = 0
                 with fabric.no_backward_sync(model, enabled=bool(i < accum_iter - 1)):
                     fabric.call("on_train_backward_start", **ctx(global_step))
                     fabric.backward(loss)
                     fabric.call("on_train_backward_end", **ctx(global_step))
+            if nan_flag:
+                log.warning(f"Loss is NaN or Inf at step {global_step}. Skipping batch.")
+                nan_counter += 1
+                if nan_counter > 10:
+                    log.error("Too many NaN/Inf losses encountered. Stopping training.")
+                    raise RuntimeError("Training stopped due to NaN/Inf losses.")
+                continue
 
             # Process is now at the end of accumulation or dataset
             outputs = apply_to_collection(outputs, Tensor, lambda x: x.detach())
