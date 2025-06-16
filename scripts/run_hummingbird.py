@@ -138,7 +138,6 @@ def setup_wandb_logging(cfg: DictConfig):
             config=config,
             name=f"{run_id}-{ckpt_step:07d}",
         )
-        # TODO: stop hardcoding the artifact name prefix
         # run.use_artifact(f"dgcnz/PART-posttrain/{run_id}-model-{ckpt_path.stem}:v0", type="model")
         return run, ckpt_step
     raise ValueError(f"unknown ckpt_mode {ckpt_mode}")

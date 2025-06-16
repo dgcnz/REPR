@@ -42,7 +42,8 @@ def load_model(run_folder: Path, ckpt_name: str) -> torch.nn.Module:
     return model
 
 
-RUN_FOLDER = Path("outputs/2025-06-13/19-56-13")
+# RUN_FOLDER = Path("outputs/2025-06-13/19-56-13")
+RUN_FOLDER = Path("outputs/2025-06-15/12-46-55")
 CKPT_NAME = "last.ckpt"
 # Initialize the model and configure sampler
 model = load_model(RUN_FOLDER, CKPT_NAME).to(DEVICE).eval()
@@ -65,9 +66,14 @@ def compute_pred_logvar_full(
 
     with torch.no_grad():
         out = model(x, params)
-        logvar = out["var_dT"]
+        # logvar = out["var_dT"]
+        logvar = out.get("disp_dT", None)
         if logvar is None:
-            raise RuntimeError("Model did not return var_dT")
+            if "var_dT" in out:
+                logvar = out["var_dT"]
+                print("Using 'var_dT' from model output.")
+            else:
+                raise RuntimeError("Model did not return disp_dT or var_dT")
         logvar = logvar.squeeze(0)
         T = logvar.shape[0]
         ids = out["joint_ids_remove"][0]

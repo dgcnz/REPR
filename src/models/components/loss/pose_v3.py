@@ -132,7 +132,7 @@ class PoseLoss(nn.Module):
         self,
         criterion: str = "l1",
         alpha_t: float = 0.5,
-        alpha_s: float = 0.75,
+        alpha_s: float = 1.0,
         alpha_ts: float = 0.5,
         uncertainty_mode: Literal[
             "none", "additive", "correlated", "correlated_proj"
