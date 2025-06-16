@@ -1,66 +1,45 @@
-import click
 import os
+import random
+
+import hydra
 import torch
 import torch.nn as nn
 import torchvision.transforms as T
-
+from hydra.utils import instantiate
+from omegaconf import DictConfig
 from torchvision.transforms.functional import InterpolationMode
 
 from data.VOCdevkit.vocdata import VOCDataModule
 from data.coco.coco_data_module import CocoDataModule
-from experiments.utils.neco_utils import PredsmIoU, get_backbone_weights
-# from src.models.vit import vit_small, vit_base, vit_large
-from src.experiments.utils.linear_finetuning_transforms import SepTransforms
-
 from data.cityscapes.cityscapes_data import CityscapesDataModule
 from data.ade20k.ade20kdata import Ade20kDataModule
-import random
+from experiments.utils.neco_utils import PredsmIoU
+from src.experiments.utils.linear_finetuning_transforms import SepTransforms
+from src.experiments.utils.timm_seg_utils import extract_feature_map
 
 
-@click.command()
-@click.option("--ckpt_path_backbone", type=str, required=True)
-@click.option("--ckpt_path_head", type=str, required=True)
-@click.option("--patch_size", type=int, default=16)
-@click.option("--arch", type=str, default="vit-small")
-@click.option("--num_classes", type=int, default=21)
-@click.option("--head_type", type=str, default="linear")
-@click.option("--dataset_name", type=str, default="voc")
-@click.option("--data_dir", type=str, required=True)
-@click.option("--batch_size", type=int, default=15)
-@click.option("--input_size", type=int, default=448)
-@click.option("--mask_eval_size", type=int, default=448)
-@click.option("--arch_version", type=int, default="v1")
-@click.option("--num_register_tokens", type=int, default=0)
-def eval_bulk(
-    ckpt_path_backbone: str,
-    ckpt_path_head: str,
-    patch_size: int,
-    arch: str,
-    num_classes: int,
-    head_type: str,
-    dataset_name: str,
-    data_dir: str,
-    batch_size: int,
-    input_size: int,
-    mask_eval_size: int,
-    arch_version: str,
-    num_register_tokens: int,
-):
+@hydra.main(version_base="1.3", config_path="../../../fabric_configs/experiment/linear_segmentation", config_name="config")
+def eval_bulk(cfg: DictConfig) -> None:
+    ckpt_path_backbone = cfg.ckpt_path_backbone
+    ckpt_path_head = cfg.ckpt_path_head
+    batch_size = cfg.batch_size
+    input_size = cfg.input_size
+    mask_eval_size = cfg.mask_eval_size
+    dataset_name = cfg.data.dataset_name
+    data_dir = cfg.data.data_dir
+    num_classes = cfg.num_classes
     device = "cuda" if torch.cuda.is_available() else "cpu"
     miou_metric = PredsmIoU(num_classes, num_classes)
 
-    model = model_func(patch_size=patch_size, **extra_args) # this should be timm
+    model: torch.nn.Module = instantiate(cfg.model.net)
+    model.eval().to(device)
 
     finetune_head = nn.Conv2d(model.embed_dim, num_classes, 1)
 
-    # load backbone
-    weights = get_backbone_weights(
-        arch, "ours", patch_size, weight_prefix="", ckpt_path=ckpt_path_backbone
-    )
-    msg = model.load_state_dict(weights, strict=False)
-    print(msg)
-    model.eval()
-    model.to(device)
+    if ckpt_path_backbone:
+        state = torch.load(ckpt_path_backbone, map_location="cpu")
+        msg = model.load_state_dict(state, strict=False)
+        print(msg)
 
     # load linear head
     state_dict = torch.load(ckpt_path_head)
@@ -157,23 +136,12 @@ def eval_bulk(
         raise ValueError(f"{dataset_name} not supported as dataset")
 
     data_module.setup()
-    spatial_res = (
-        input_size / patch_size
-    )  # for resnets we use dilated convs in the last bottlenceck to match the vits res
-    assert spatial_res.is_integer()
-    spatial_res = int(spatial_res)
 
     # Get head predictions
     with torch.no_grad():
         for i, (imgs, masks) in enumerate(data_module.val_dataloader()):
             bs = imgs.size(0)
-            tokens = model.forward_backbone(imgs.to(device))
-            if "vit" in arch:
-                tokens = (
-                    tokens[:, 1:]
-                    .reshape(bs, spatial_res, spatial_res, model.embed_dim)
-                    .permute(0, 3, 1, 2)
-                )
+            tokens = extract_feature_map(model, imgs.to(device))
             tokens = nn.functional.interpolate(
                 tokens, size=(mask_eval_size, mask_eval_size), mode="bilinear"
             )

@@ -1,0 +1,24 @@
+defaults:
+  - _self_
+  - model: dino_s
+  - data: voc
+
+# training params
+batch_size: 128
+input_size: 448
+mask_eval_size: 448
+num_workers: 5
+max_epochs: 25
+drop_at: 20
+decay_rate: 0.1
+val_iters: 512
+lr: 0.01
+restart: false
+ckpt_path: null
+ckpt_path_backbone: null
+ckpt_path_head: null
+ckpt_dir: ${paths.output_dir}
+tags: []
+run_name: null
+num_classes: 21
+fast_dev_run: false

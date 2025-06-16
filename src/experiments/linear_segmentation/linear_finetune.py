@@ -1,25 +1,26 @@
-import click
 import os
+import random
+import re
+from pathlib import Path
+from typing import Tuple
+
+import hydra
 import torch
 import torch.nn as nn
-import pytorch_lightning as pl
-import random
-import torchvision.models.resnet as resnet
 import torchvision.transforms as T
-import sacred
-import pandas as pd
-from datetime import datetime
+from hydra.utils import instantiate
+from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.loggers import NeptuneLogger
 from torch.optim.lr_scheduler import StepLR
 from torchvision.transforms.functional import InterpolationMode
-from typing import List, Any, Tuple
+from lightning.pytorch.loggers import WandbLogger
+import wandb
+import pytorch_lightning as pl
 
 from data.VOCdevkit.vocdata import VOCDataModule
 from data.coco.coco_data_module import CocoDataModule
-from experiments.utils.neco_utils import PredsmIoU, get_backbone_weights
-from src.models.vit import vit_small, vit_base, vit_large
+from experiments.utils.neco_utils import PredsmIoU
 from src.experiments.utils.linear_finetuning_transforms import (
     Compose,
     Normalize,
@@ -28,66 +29,67 @@ from src.experiments.utils.linear_finetuning_transforms import (
     ToTensor,
     SepTransforms,
 )
+from src.experiments.utils.timm_seg_utils import extract_feature_map, timm_patch_size
+from src.utils.io import find_run_id
 
 # from src.models.vit_clip_exp import vit_base as vit_clip_base
 from src.data.cityscapes.cityscapes_data import CityscapesDataModule
 from src.data.ade20k.ade20kdata import Ade20kDataModule
 
-ex = sacred.experiment.Experiment()
-api_key = "<YOUR API KEY HERE>"
+
+def validate_checkpoint(ckpt_path: Path) -> tuple[int, str, dict]:
+    """Return the step, run ID and config from a checkpoint.
+
+    :param ckpt_path: Path to the Lightning checkpoint file.
+    :returns: Tuple ``(global_step, run_id, config)`` extracted from the file.
+    """
+
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"checkpoint {ckpt_path} not found")
+
+    state = torch.load(ckpt_path, map_location="cpu")
+    ckpt_step = int(state["global_step"])
+
+    m = re.search(r"step_(\d+)\.ckpt", ckpt_path.name)
+    if m and int(m.group(1)) != ckpt_step:
+        raise ValueError(
+            f"step mismatch: filename step {m.group(1)} != global_step {ckpt_step}"
+        )
+
+    output_dir = ckpt_path.parent
+    run_id = find_run_id(output_dir / "wandb")
+    config_path = output_dir / ".hydra" / "config.yaml"
+    resume_cfg = OmegaConf.to_container(OmegaConf.load(config_path), resolve=False)
+
+    return ckpt_step, run_id, resume_cfg
 
 
-@click.command()
-@click.option("--config_path", type=str)
-@click.option("--ckpt_path", type=str, default=None)
-@click.option("--method", type=str, default=None)
-@click.option("--arch", type=str, default=None)
-def entry(config_path, ckpt_path, method, arch):
-    if config_path is not None:
-        ex.add_config(
-            os.path.join(os.path.abspath(os.path.dirname(__file__)), config_path)
+@hydra.main(version_base="1.3", config_path="../../../fabric_configs/experiment/linear_segmentation", config_name="config")
+def main(cfg: DictConfig) -> None:
+    if cfg.restart and cfg.ckpt_path:
+        step, run_id, resume_cfg = validate_checkpoint(Path(cfg.ckpt_path))
+        run = wandb.init(
+            project="PART-linear-segmentation",
+            group=run_id,
+            config=resume_cfg,
+            name=f"{run_id}-{step:07d}",
         )
     else:
-        ex.add_config(
-            os.path.join(os.path.abspath(os.path.dirname(__file__)), "finetune_dev.yml")
-        )
-    time = datetime.now().strftime("%Y%m%d-%H%M%S")
-    ex_name = f"linear-finetune-{time}"
-    checkpoint_dir = os.path.join(
-        ex.configurations[0]._conf["train"]["ckpt_dir"], ex_name
-    )
-    ex.observers.append(sacred.observers.FileStorageObserver(checkpoint_dir))
-    params = {"seed": 400}
-    if method is not None:
-        params["train.method"] = method
-    if ckpt_path is not None:
-        params["train.ckpt_path"] = ckpt_path
-    if arch is not None:
-        params["train.arch"] = arch
+        run = wandb.init(project="PART-linear-segmentation")
+        run_id = run.id
+        step = 0
+        run.name = f"{run_id}-{step:07d}"
+        run.group = run_id
 
-    ex.run(config_updates=params, options={"--name": ex_name})
+    run_name = run.name
+    run.config.update({"tags": cfg.tags}, allow_val_change=True)
+    logger = WandbLogger(experiment=run)
 
+    seed_everything(0)
+    input_size = cfg.input_size
 
-@ex.main
-@ex.capture
-def linear_finetune(_config, _run):
-    # Init logger
-    neptune_logger = NeptuneLogger(
-        api_key=api_key,
-        mode="offline" if _config.get("log_status") == "offline" else "async",
-        project="<Your Project Name>",
-        name=_run.experiment_info["name"],
-        tags=_config["tags"].split(","),
-    )
-    params = pd.json_normalize(_config).to_dict(orient="records")[0]
-    neptune_logger.experiment["parameters"] = params
-
-    print("Config:")
-    print(_config)
-    data_config = _config["data"]
-    train_config = _config["train"]
-    seed_everything(_config["seed"])
-    input_size = data_config["size_crops"]
+    data_config = cfg.data
+    train_config = cfg
 
     # Init transforms and train data
     train_transforms = Compose(
@@ -113,15 +115,15 @@ def linear_finetune(_config, _run):
         ]
     )
 
-    data_dir = data_config["data_dir"]
-    dataset_name = data_config["dataset_name"]
+    data_dir = data_config.data_dir
+    dataset_name = data_config.dataset_name
     if dataset_name == "voc":
         num_classes = 21
         ignore_index = 255
         data_module = VOCDataModule(
-            batch_size=train_config["batch_size"],
+            batch_size=train_config.batch_size,
             return_masks=True,
-            num_workers=_config["num_workers"],
+            num_workers=train_config.num_workers,
             train_split="trainaug",
             val_split="val",
             data_dir=data_dir,
@@ -148,8 +150,8 @@ def linear_finetune(_config, _run):
         print(f"sampled {len(file_list)} COCO images for training")
 
         data_module = CocoDataModule(
-            batch_size=train_config["batch_size"],
-            num_workers=_config["num_workers"],
+            batch_size=train_config.batch_size,
+            num_workers=train_config.num_workers,
             file_list=file_list,
             data_dir=data_dir,
             file_list_val=file_list_val,
@@ -167,8 +169,8 @@ def linear_finetune(_config, _run):
             train_transforms=train_transforms,
             val_transforms=val_transforms,
             shuffle=False,
-            num_workers=_config["num_workers"],
-            batch_size=train_config["batch_size"],
+            num_workers=train_config.num_workers,
+            batch_size=train_config.batch_size,
         )
     elif dataset_name == "cityscapes":
         num_classes = 19
@@ -179,51 +181,29 @@ def linear_finetune(_config, _run):
             train_transforms=train_transforms,
             val_transforms=val_transforms,
             shuffle=True,
-            num_workers=_config["num_workers"],
-            batch_size=train_config["batch_size"],
+            num_workers=train_config.num_workers,
+            batch_size=train_config.batch_size,
         )
     else:
         raise ValueError(f"{dataset_name} not supported")
 
-    # Init Method
-    arch = train_config["arch"]
-    patch_size = train_config["patch_size"]
-    restart = train_config["restart"]
-    val_iters = train_config["val_iters"]
-    method = train_config["method"]
-    spatial_res = input_size / patch_size
-    decay_rate = train_config.get("decay_rate")
-    assert spatial_res.is_integer()
+    # Init backbone and linear head
+    backbone = instantiate(cfg.model.net)
     model = LinearFinetune(
-        patch_size=patch_size,
-        head_type=train_config.get("head_type"),
-        arch=arch,
-        arch_version=train_config.get("arch_version"),
+        net=backbone,
         num_classes=num_classes,
-        lr=train_config["lr"],
+        lr=train_config.lr,
         input_size=input_size,
-        spatial_res=int(spatial_res),
-        val_iters=val_iters,
-        decay_rate=decay_rate if decay_rate is not None else 0.1,
-        drop_at=train_config["drop_at"],
+        val_iters=train_config.val_iters,
+        drop_at=train_config.drop_at,
+        decay_rate=train_config.decay_rate,
         ignore_index=ignore_index,
-        num_register_tokens=train_config["num_register_tokens"]
-        if "num_register_tokens" in train_config
-        else 0,
     )
 
-    # Optionally load weights
-    if not restart:
-        weights = get_backbone_weights(
-            arch, method, patch_size=patch_size, ckpt_path=train_config.get("ckpt_path")
-        )
-        msg = model.load_state_dict(weights, strict=False)
-        print(msg)
+    ckpt_path = train_config.ckpt_path if train_config.restart else None
 
     # Init checkpoint callback storing top 3 heads
-    checkpoint_dir = os.path.join(
-        train_config["ckpt_dir"], _run.experiment_info["name"]
-    )
+    checkpoint_dir = os.path.join(train_config.ckpt_dir, run_name)
     checkpoint_callback = ModelCheckpoint(
         dirpath=checkpoint_dir,
         monitor="miou_val",
@@ -236,11 +216,11 @@ def linear_finetune(_config, _run):
     # Init trainer and start training head
     trainer = Trainer(
         num_sanity_val_steps=0,
-        logger=neptune_logger,
-        max_epochs=train_config["max_epochs"],
-        devices=_config["gpus"],
+        logger=logger,
+        max_epochs=train_config.max_epochs,
+        devices=1,
         accelerator="cuda",
-        fast_dev_run=train_config["fast_dev_run"],
+        fast_dev_run=train_config.fast_dev_run,
         log_every_n_steps=50,
         benchmark=True,
         deterministic=False,
@@ -250,45 +230,44 @@ def linear_finetune(_config, _run):
     trainer.fit(
         model,
         datamodule=data_module,
-        ckpt_path=train_config["ckpt_path"] if restart else None,
+        ckpt_path=ckpt_path,
     )
+
+    if isinstance(logger, WandbLogger):
+        logger.experiment.finish()
 
 
 class LinearFinetune(pl.LightningModule):
     def __init__(
         self,
-        patch_size: int,
+        net: nn.Module,
         num_classes: int,
         lr: float,
         input_size: int,
-        spatial_res: int,
         val_iters: int,
         drop_at: int,
-        arch: str,
-        arch_version: str = None,
-        head_type: str = None,
         decay_rate: float = 0.1,
         ignore_index: int = 255,
-        num_register_tokens=0,
-    ):
-        super().__init__()
-        if type(num_register_tokens) == tuple or type(num_register_tokens) == list:
-            num_register_tokens = num_register_tokens[0]
-        self.save_hyperparameters()
-        if "vit" in arch:
-            # Init Model
-            if arch == "vit-small":
-                model_func = vit_small
-            elif arch == "vit-base":
-                model_func = vit_base
-            elif arch == "vit-large":
-                model_func = vit_large
-            extra_args = {}
-            if arch_version == "v2":
-                extra_args["num_register_tokens"] = num_register_tokens
-            self.model = model_func(patch_size=patch_size, **extra_args)
+    ) -> None:
+        """Train a linear segmentation head on frozen features.
 
-        self.finetune_head = nn.Conv2d(self.model.embed_dim, num_classes, 1)
+        :param net: Backbone model to freeze.
+        :param num_classes: Number of segmentation classes.
+        :param lr: Learning rate for the head optimizer.
+        :param input_size: Input image size in pixels.
+        :param val_iters: Maximum validation batches per epoch.
+        :param drop_at: Scheduler step interval.
+        :param decay_rate: Scheduler decay rate.
+        :param ignore_index: Label value to ignore when computing loss.
+        """
+        super().__init__()
+        self.save_hyperparameters(ignore=["net"])
+        self.model = net
+        try:
+            in_ch = net.embed_dim
+        except AttributeError:
+            in_ch = net.num_features
+        self.finetune_head = nn.Conv2d(in_ch, num_classes, 1)
 
         self.criterion = torch.nn.CrossEntropyLoss(ignore_index=ignore_index)
         self.miou_metric = PredsmIoU(num_classes, num_classes)
@@ -296,9 +275,8 @@ class LinearFinetune(pl.LightningModule):
         self.lr = lr
         self.val_iters = val_iters
         self.input_size = input_size
-        self.spatial_res = spatial_res
+        self.spatial_res = input_size // timm_patch_size(net)
         self.drop_at = drop_at
-        self.arch = arch
         self.ignore_index = ignore_index
         self.decay_rate = decay_rate
         self.train_mask_size = 100
@@ -321,21 +299,11 @@ class LinearFinetune(pl.LightningModule):
 
     def training_step(self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int):
         imgs, masks = batch
-        bs = imgs.size(0)
-        res = imgs.size(3)
-        assert res == self.input_size
+        assert imgs.size(3) == self.input_size
         self.model.eval()
 
         with torch.no_grad():
-            tokens = self.model.forward_backbone(imgs)
-            if "vit" in self.arch:
-                tokens = (
-                    tokens[:, 1:]
-                    .reshape(
-                        bs, self.spatial_res, self.spatial_res, self.model.embed_dim
-                    )
-                    .permute(0, 3, 1, 2)
-                )
+            tokens = extract_feature_map(self.model, imgs)
             tokens = nn.functional.interpolate(
                 tokens,
                 size=(self.train_mask_size, self.train_mask_size),
@@ -361,16 +329,7 @@ class LinearFinetune(pl.LightningModule):
         if self.val_iters is None or batch_idx < self.val_iters:
             with torch.no_grad():
                 imgs, masks = batch
-                bs = imgs.size(0)
-                tokens = self.model.forward_backbone(imgs)
-                if "vit" in self.arch:
-                    tokens = (
-                        tokens[:, 1:]
-                        .reshape(
-                            bs, self.spatial_res, self.spatial_res, self.model.embed_dim
-                        )
-                        .permute(0, 3, 1, 2)
-                    )
+                tokens = extract_feature_map(self.model, imgs)
                 tokens = nn.functional.interpolate(
                     tokens,
                     size=(self.val_mask_size, self.val_mask_size),
@@ -397,6 +356,4 @@ class LinearFinetune(pl.LightningModule):
 
 
 if __name__ == "__main__":
-    print("+" * 50)
-    entry()
-    print("-" * 50)
+    main()
