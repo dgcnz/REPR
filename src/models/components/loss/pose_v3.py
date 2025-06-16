@@ -26,6 +26,7 @@ class PoseHead(nn.Module):
         ] = "none",
         min_logdisp: float = -14.0,
         max_logdisp: float = +2.0,
+        gate_dim: int = 16,
     ):
         super().__init__()
         assert uncertainty_mode in ("none", "additive", "correlated", "correlated_proj")
@@ -34,6 +35,7 @@ class PoseHead(nn.Module):
         self.embed_dim = embed_dim
         self.proj_embed_dim = proj_embed_dim
         self.uncertainty_mode = uncertainty_mode
+        self.gate_dim = gate_dim
         self.tanh = nn.Tanh() if apply_tanh else nn.Identity()
 
         # mean head (no bias since mu_ij = Wz_i - Wz_j)
@@ -46,10 +48,8 @@ class PoseHead(nn.Module):
             # per-token log-dispersion
             self.disp_proj = nn.Linear(embed_dim, num_targets, bias=True)
         if uncertainty_mode == "correlated":
-            self.gate_dim = 16
             self.gate_proj = nn.Linear(self.embed_dim, self.gate_dim, bias=False)
         if uncertainty_mode == "correlated_proj":
-            self.gate_dim = 16
             self.gate_proj = nn.Linear(self.proj_embed_dim, self.gate_dim, bias=False)
 
         self.initialize_weights()

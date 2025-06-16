@@ -56,6 +56,7 @@ def _freeze_module(module: nn.Module) -> nn.Module:
     module._no_grad_wrapped = True  # type: ignore[attr-defined]
     return module
 
+
 def noop(*args, **kwargs):
     return dict()
 
@@ -110,6 +111,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         alpha_t: float = 0.5,
         alpha_ts: float = 0.5,
         alpha_s: float = 0.75,
+        gate_dim: int = 16,
         # patch loss
         sigma_yx: float = 0.2,
         sigma_hw: float = 1.0,
@@ -212,6 +214,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             num_targets=self.num_targets,
             apply_tanh=apply_tanh,
             uncertainty_mode=uncertainty_mode,
+            gate_dim=gate_dim,
         )
         self.dino_head = DINOHead(
             in_dim=embed_dim,
@@ -310,7 +313,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         _freeze_module(mod)
         if module == "_pose_loss":
             self.forward_pose_loss = noop
-        
+
         mod.forward = noop
         logging.info(f"Bypassing module: {module}")
 
@@ -437,8 +440,12 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             self._register_or_overwrite_buffer(k, v)
             setattr(self, f"_{k}", v)
 
-        view_ids_N = torch.arange(V, device=self.Ns.device).repeat_interleave(self.Ns, output_size=N)
-        view_ids_M = torch.arange(V, device=self.Ms.device).repeat_interleave(self.Ms, output_size=M)
+        view_ids_N = torch.arange(V, device=self.Ns.device).repeat_interleave(
+            self.Ns, output_size=N
+        )
+        view_ids_M = torch.arange(V, device=self.Ms.device).repeat_interleave(
+            self.Ms, output_size=M
+        )
         self._register_or_overwrite_buffer("view_ids_N", view_ids_N.tolist())
         self._register_or_overwrite_buffer("view_ids_M", view_ids_M.tolist())
 
@@ -738,9 +745,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         losses = self.forward_pose_loss(dec_input, gt_dT, joint_ids_remove)
         # joint_cls: [B, V, D]
         # teacher is just the cls of the global views
-        losses.update(self._cinv_loss(
-            proj_cls, proj_cls[:, : self._gV].detach()
-        ))
+        losses.update(self._cinv_loss(proj_cls, proj_cls[:, : self._gV].detach()))
         losses.update(self._ccr_loss(proj_cls))
         # losses["loss_psmooth"] = self._psmooth_loss(proj_patches, gt_dT)
         # losses["loss_pstress"] = self._pstress_loss(proj_patches, gt_dT)
