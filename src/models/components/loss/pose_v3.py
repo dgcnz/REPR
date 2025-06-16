@@ -44,15 +44,15 @@ class PoseHead(nn.Module):
         # dispersion head(s)
         self.min_logdisp = min_logdisp
         self.max_logdisp = max_logdisp
-        gate_in_dim = self.embed_dim if uncertainty_mode == "correlated" else gate_dim
+        gate_in_dim = self.embed_dim if uncertainty_mode == "correlated" else self.proj_embed_dim
         if uncertainty_mode in ("additive", "correlated", "correlated_proj"):
             # per-token log-dispersion
             self.disp_proj = nn.Linear(embed_dim, num_targets, bias=True)
 
         if uncertainty_mode in ["correlated", "correlated_proj"]:
-            if gate_in_dim == 0:
+            self.beta = 100
+            if self.gate_dim == 0:
                 self.gate_proj = nn.Identity()
-                self.beta = 100
                 self.gate_init = math.log(5e-3)
                 self.gate_mult = nn.Parameter(
                     torch.tensor(self.gate_init / self.beta), requires_grad=True

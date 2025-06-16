@@ -283,8 +283,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # assert lambda_psmooth == lambda_pcr
         assert not lambda_psmooth
 
-        assert lambda_ccr == lambda_cinv
-
         self.initialize_weights()
         if freeze_encoder:
             self.freeze_encoder()
