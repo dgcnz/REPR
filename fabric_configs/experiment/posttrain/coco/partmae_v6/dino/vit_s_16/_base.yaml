@@ -86,7 +86,7 @@ scheduler:
   warmup_t: ??? 
   t_initial: ??? # 800 epochs?
   warmup_lr_init: 1e-7
-  lr_min: 1e-6
+  lr_min: 1e-7
 
 
 optimizer:
