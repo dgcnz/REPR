@@ -1,0 +1,11 @@
+ckpt_mode: backbone
+
+net:
+  _target_: timm.create_model
+  model_name: vit_small_patch16_224.dino
+  pretrained: True
+  pretrained_strict: False
+  img_size: 448
+  pretrained_cfg_overlay:
+    hf_hub_id: FunAILab/NeCo
+    hf_hub_filename: vit-small/dino-architectures/neco_on_dino_vit16_teacher.ckpt

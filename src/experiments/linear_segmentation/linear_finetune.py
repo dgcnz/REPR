@@ -186,7 +186,7 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(f"{dataset_name} not supported")
 
     # Init backbone and linear head
-    backbone = instantiate(cfg.model.net)
+    backbone = instantiate(cfg.model.net, _convert_="all")
     model = LinearFinetune(
         net=backbone,
         num_classes=num_classes,
@@ -201,6 +201,7 @@ def main(cfg: DictConfig) -> None:
     ckpt_path = train_config.ckpt_path if train_config.restart else None
 
     # Init checkpoint callback storing top 3 heads
+    print(f"{train_config.ckpt_dir}, {run_name}")
     checkpoint_dir = os.path.join(train_config.ckpt_dir, run_name)
     checkpoint_callback = ModelCheckpoint(
         dirpath=checkpoint_dir,
