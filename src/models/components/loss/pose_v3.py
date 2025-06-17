@@ -22,14 +22,20 @@ class PoseHead(nn.Module):
         num_targets: int,
         apply_tanh: bool = False,
         uncertainty_mode: Literal[
-            "none", "additive", "correlated", "correlated_proj"
+            "none", "additive", "correlated", "correlated_proj", "correlated_only"
         ] = "none",
         min_logdisp: float = -14.0,
         max_logdisp: float = +2.0,
         gate_dim: int = 16,
     ):
         super().__init__()
-        assert uncertainty_mode in ("none", "additive", "correlated", "correlated_proj")
+        assert uncertainty_mode in (
+            "none",
+            "additive",
+            "correlated",
+            "correlated_proj",
+            "correlated_only",
+        )
         self.num_targets = num_targets
         self.apply_tanh = apply_tanh
         self.embed_dim = embed_dim
@@ -44,7 +50,9 @@ class PoseHead(nn.Module):
         # dispersion head(s)
         self.min_logdisp = min_logdisp
         self.max_logdisp = max_logdisp
-        gate_in_dim = self.embed_dim if uncertainty_mode == "correlated" else self.proj_embed_dim
+        gate_in_dim = (
+            self.embed_dim if uncertainty_mode == "correlated" else self.proj_embed_dim
+        )
         if uncertainty_mode in ("additive", "correlated", "correlated_proj"):
             # per-token log-dispersion
             self.disp_proj = nn.Linear(embed_dim, num_targets, bias=True)
@@ -60,6 +68,16 @@ class PoseHead(nn.Module):
             else:
                 self.gate_proj = nn.Linear(gate_in_dim, self.gate_dim, bias=False)
                 self.gate_mult = nn.Parameter(torch.tensor(0), requires_grad=False)
+
+        if uncertainty_mode == "correlated_only":
+            # no gate, only one gate_mult per target
+            self.beta = 100
+            self.gate_proj = nn.Identity()
+            self.gate_init = math.log(1.5)
+            self.gate_mult = nn.Parameter(
+                torch.full((self.num_targets,), self.gate_init / self.beta),
+                requires_grad=True,
+            )
 
         self.initialize_weights()
 
@@ -94,31 +112,72 @@ class PoseHead(nn.Module):
         if self.uncertainty_mode == "none":
             return out
 
+        # additive: additive_disp
+        # correlated: additive_disp + correlated_disp
+        # correlated_proj: additive_disp + correlated_disp
+        # correlated_only: correlated_disp
+
+        logdisp_pair = None
+        if self.uncertainty_mode in [
+            "correlated",
+            "correlated_proj",
+            "correlated_only",
+        ]:
+            logdisp_pair, out_corr = self.correlated_disp(z, proj)
+            out.update(out_corr)
+
+        if self.uncertainty_mode in ["additive", "correlated", "correlated_proj"]:
+            logdisp_pair_add, out_add = self.additive_disp(z)
+            out.update(out_add)
+            if logdisp_pair is None:
+                logdisp_pair = logdisp_pair_add
+            else:
+                logdisp_pair = logdisp_pair + logdisp_pair_add
+
+        out["disp_dT"] = torch.exp(logdisp_pair)  # [B, M, M, K]
+        return out
+
+    def correlated_disp(self, z: Tensor, proj: Tensor) -> Tensor:
+        similarity_logits = self.gated_similarities(z, proj)
+        gate_mult = torch.exp(self.beta * self.gate_mult)
+        similarity_logits = similarity_logits.unsqueeze(-1)
+        similarity_logits = similarity_logits * gate_mult
+        out = dict(
+            loss_pose_simlog_mean=similarity_logits.detach().mean(),
+            loss_pose_simlog_std=similarity_logits.detach().std(),
+            **dict(
+                zip(
+                    [
+                        "loss_pose_gate_mult_dy",
+                        "loss_pose_gate_mult_dx",
+                        "loss_pose_gate_mult_dlogh",
+                        "loss_pose_gate_mult_dlogw",
+                    ],
+                    gate_mult.detach().expand(self.num_targets),
+                )
+            ),
+        )
+        return -similarity_logits, out
+
+    def additive_disp(self, z: Tensor) -> Tensor:
         logdisp_tok = self.disp_proj(z).clamp(self.min_logdisp, self.max_logdisp)
         logdisp_pair = torch.logaddexp(
             logdisp_tok.unsqueeze(2), logdisp_tok.unsqueeze(1)
         )
-        out["disp_T"] = logdisp_tok.detach()
-        out["loss_pose_disp_T_mean"] = out["disp_T"].mean()
-        out["loss_pose_disp_T_std"] = out["disp_T"].std()
+        out = dict(
+            disp_T=logdisp_tok.detach(),
+            loss_pose_disp_T_mean=logdisp_tok.mean(),
+            loss_pose_disp_T_std=logdisp_tok.std(),
+        )
+        return logdisp_pair, out
 
-        if self.uncertainty_mode in ["correlated", "correlated_proj"]:
-            # --- Correlated Case ---
-            gate_in = z if self.uncertainty_mode == "correlated" else proj
-            h_gate = self.gate_proj(gate_in)  # [B, M, gate_dim]
-            # Use bmm for explicit batched matrix multiplication
-            similarity_logits = torch.bmm(h_gate, h_gate.transpose(-1, -2))  # [B, M, M]
-            gate_mult = torch.exp(self.beta * self.gate_mult)
-            similarity_logits = similarity_logits * gate_mult
-            similarity_logits = similarity_logits.unsqueeze(-1)
-            # Broadcast for K: [B, M, M, 1]
-            logdisp_pair = logdisp_pair - similarity_logits
-            out["loss_pose_simlog_mean"] = similarity_logits.detach().mean()
-            out["loss_pose_simlog_std"] = similarity_logits.detach().std()
-            out["loss_pose_gate_mult"] = gate_mult.detach()
-
-        out["disp_dT"] = torch.exp(logdisp_pair)  # [B, M, M, K]
-        return out
+    def gated_similarities(self, z: Tensor, proj: Tensor) -> dict[str, Tensor]:
+        # --- Correlated Case ---
+        gate_in = z if self.uncertainty_mode == "correlated" else proj
+        h_gate = self.gate_proj(gate_in)  # [B, M, gate_dim]
+        # Use bmm for explicit batched matrix multiplication
+        similarity_logits = torch.bmm(h_gate, h_gate.transpose(-1, -2))  # [B, M, M]
+        return similarity_logits
 
 
 class PoseLoss(nn.Module):
@@ -140,7 +199,13 @@ class PoseLoss(nn.Module):
     ):
         super().__init__()
         assert criterion in ("mse", "l1")
-        assert uncertainty_mode in ("none", "additive", "correlated", "correlated_proj")
+        assert uncertainty_mode in (
+            "none",
+            "additive",
+            "correlated",
+            "correlated_proj",
+            "correlated_only",
+        )
         self.criterion_str = criterion
         self.error_fn = torch.square if criterion == "mse" else torch.abs
         # scalar in front of NLL: ½ for Gaussian, 1 for Laplace

@@ -6,6 +6,7 @@ from torch.nn import functional as F
 
 class CLSCodingRateLoss(nn.Module):
     # expansion loss for MCR
+    # this loss is used to estimate the coding rate of the CLS token embeddings
     def __init__(self, embed_dim: int, gV: int, eps: float, num_chunks: int = 2):
         super().__init__()
         self.eps = eps
@@ -33,11 +34,9 @@ class CLSCodingRateLoss(nn.Module):
 
 class CLSInvarianceLoss(nn.Module):
     # compression loss for MCR
-    def __init__(self):
-        super().__init__()
-
+    # This loss is used to maximize the cosine similarity between student and teacher cls features
     def forward(
-        self, z_stu: Float[Tensor, "B V D"], z_tea: Float[Tensor, "B V D"]
+        self, z_stu: Float[Tensor, "B V D"], z_tea: Float[Tensor, "B 2 D"]
     ) -> Tensor:
         z_stu = z_stu.permute(1, 0, 2)
         z_tea = z_tea.permute(1, 0, 2)
