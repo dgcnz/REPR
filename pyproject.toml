@@ -75,6 +75,7 @@ dev = [
     "pyperclip>=1.9.0",
     "pytest>=8.3.5",
     "pytest-benchmark>=5.1.0",
+    "python-louvain>=0.16",
     "ruff>=0.11.4",
     "tabulate>=0.9.0",
     "torch-lr-finder>=0.2.2",

@@ -8,7 +8,9 @@ from gradio_patch_selection import PatchSelector
 import torchvision.transforms as T
 from omegaconf import OmegaConf
 import hydra
+import timm
 import logging
+from src.models.components.converters.timm.partmae_v6 import preprocess
 from torch.utils._pytree import tree_map_only
 
 logging.basicConfig(level=logging.INFO)
@@ -29,87 +31,66 @@ transform = T.Compose(
 
 def load_model(run_folder: Path, ckpt_name: str) -> torch.nn.Module:
     """Load the pretrained PART model for inference."""
-    cfg = OmegaConf.load(run_folder / ".hydra" / "config.yaml")
-    if "predict_uncertainty" in cfg["model"]:
-        predict_uncertainty = cfg["model"].pop("predict_uncertainty")
-        if predict_uncertainty:
-            cfg["model"]["uncertainty_mode"] = "additive"
-        else:
-            cfg["model"]["uncertainty_mode"] = "none"
-    elif "uncertainty_mode" in cfg["model"]:
-        pass
-    else:
-        raise ValueError("Uncertainty mode not specified in the config.")
-    print(cfg["model"]["uncertainty_mode"])
     ckpt_path = run_folder / ckpt_name
     ckpt = torch.load(ckpt_path, map_location="cuda")
-    state_dict = ckpt["model"]
-    if "pose_head.mu.weight" in state_dict:
-        state_dict["pose_head.mu_proj.weight"] = state_dict.pop("pose_head.mu.weight")
-    if "pose_head.logvar.weight" in state_dict:
-        state_dict["pose_head.disp_proj.weight"] = state_dict.pop("pose_head.logvar.weight")
-    if "pose_head.logvar.bias" in state_dict:
-        state_dict["pose_head.disp_proj.bias"] = state_dict.pop("pose_head.logvar.bias")
-    if "pose_head.gate_proj.weight" in state_dict:
-        if "gate_dim" not in cfg["model"]:
-            cfg["model"]["gate_dim"] = state_dict["pose_head.gate_proj.weight"].shape[0]
-            print(f"Gate dimension not specified in the config, inferring from state_dict: {cfg['model']['gate_dim']}")
-        assert cfg["model"]["gate_dim"] == state_dict["pose_head.gate_proj.weight"].shape[0]
-    if "pose_head.gate_mult" not in state_dict:
-        state_dict["pose_head.gate_mult"] = torch.zeros(1)
-    model = hydra.utils.instantiate(
-        cfg["model"],
-        _target_="src.models.components.partmae_v6.PARTMaskedAutoEncoderViT",
-        num_views=2,  # we're using 2 views for this example
-        sampler="ongrid_canonical",
-        mask_ratio=0.0,
-        pos_mask_ratio=1.0,
+    model = timm.create_model(
+        "vit_small_patch16_224",
+        pretrained=False,
+        num_classes=0,
     )
+    # OPTION 1: MASK POS EMBED
+    # cls_pos_embed = state_dict["pos_embed"][:, :1, :]  # [1, 1, D]
+    # pos_embed = state_dict["pos_embed"][:, 1:, :]  # [1, N, D]
+    # pos_embed = state_dict["mask_pos_token"].expand_as(pos_embed)
+    # state_dict["pos_embed"] = torch.cat([cls_pos_embed, pos_embed], dim=1)  # [1, N+1, D]
+    # OPTION 2: ZERO POS EMBED
+    # state_dict["pos_embed"] = torch.zeros_like(state_dict["pos_embed"])
+    state_dict = preprocess(ckpt)
     model.load_state_dict(state_dict, strict=True)
     return model
 
-
-RUN_FOLDER = Path("outputs/2025-06-15/22-59-28")
-CKPT_NAME = "last.ckpt"
+CFG_FOLDER = Path("fabric_configs/experiment/hummingbird/model")
+MODEL = "partmae_v6_s"
+CKPT_PATH = Path("outputs/2025-06-17/10-52-57/last.ckpt")
+model_conf = OmegaConf.load(CFG_FOLDER / f"{MODEL}.yaml")
+model_conf.ckpt_path = CKPT_PATH
+model = hydra.utils.instantiate(model_conf, _convert_='all')["net"].eval().cuda()
 # Initialize the model and configure sampler
-model = load_model(RUN_FOLDER, CKPT_NAME).to(DEVICE).eval()
+# model = load_model(RUN_FOLDER, CKPT_NAME).to(DEVICE).eval()
 
 
-def compute_pred_dT_full_v2(pilA: Image.Image, pilB: Image.Image):
+def compute_sim(pilA: Image.Image, pilB: Image.Image):
     # Preprocess and batch
-    tA = transform(pilA).to(DEVICE)
-    tB = transform(pilB).to(DEVICE)
-    x = [torch.stack([tA, tB]).unsqueeze(0)]  # Stack images into a batch
-    params = [torch.randn(1, 2, 8, device=DEVICE)]
+    xA = transform(pilA).to(DEVICE)
+    xB = transform(pilB).to(DEVICE)
+    x = torch.stack([xA, xB], dim=0)  # [2, C, H, W]
 
     with torch.no_grad():
-        out = model(x, params)
-        pred_dT = out["pred_dT"]  # [1, 2, N, 4]
-        pred_dT = torch.clamp(pred_dT, -1.0, 1.0)
-        pred_dT = pred_dT.squeeze(0)
-        T = pred_dT.shape[0]
-        ids = out["joint_ids_remove"][0]
-        ids = torch.argsort(ids)
-        rows = ids.unsqueeze(1).expand(T, T)
-        cols = ids.unsqueeze(0).expand(T, T)
-        pred_dT = pred_dT[rows, cols]
-    return pred_dT.cpu().numpy()
+        feats = model.forward_features(x)
+        # l2 normalize features
+        # remove cls token
+        feats = feats[:, model.num_prefix_tokens :, :]  # [B, N, D]
+        feats = torch.nn.functional.normalize(feats, dim=-1) 
+        # B N D
+
+    # we're interested in seeing the distance (cosine) between patches in images A and B
+    # not inside the same image.
+    # so the final similarity matrix should be: N N 
+    # sim[i, j] = similarity between patch i in image A and patch j in image B
+    featA, featB = feats[0], feats[1]  # each is [N, D]
+    sim = featA @ featB.t()  
+    print(sim.shape)
+    return sim.cpu().numpy()  # convert to numpy for further processing
 
 
 # Helper: overlay distance heatmap on image B
 def overlay_distance_heatmap(
-    pilB: Image.Image, pred_dT_full: np.ndarray, N: int, patch_idx_A: int
+    pilB: Image.Image, sim: np.ndarray, N: int, patch_idx_A: int
 ):
-    start_B = N
-    dists = np.linalg.norm(
-        pred_dT_full[patch_idx_A, start_B : start_B + N, :2], axis=-1
-    )
-    # sharpen distances using softmax
-    dists = -dists
-
     grid_size = int(np.sqrt(N))
+    sim = sim[patch_idx_A] # get distances from patch A to all patches in B
     # revert distances so that 1 is close, 0 is far
-    heat = dists.reshape(grid_size, grid_size)
+    heat = sim.reshape(grid_size, grid_size)
     heat = (heat - heat.min()) / (heat.max() - heat.min() + 1e-8)
 
     cmap = plt.get_cmap("jet")
@@ -158,12 +139,10 @@ def update_overlay(annotation: dict, imageB):
     pilA = pilA.resize((IMG_SIZE, IMG_SIZE), Image.LANCZOS)
     pilB = pilB.resize((IMG_SIZE, IMG_SIZE), Image.LANCZOS)
 
-    pred_dT_full = compute_pred_dT_full_v2(pilA, pilB)
-    assert pred_dT_full.shape[0] % 2 == 0, "pred_dT_full should be even"
-    N = pred_dT_full.shape[0] // 2
+    sim = compute_sim(pilA, pilB)
+    N = sim.shape[0]
 
-    # Use the resized pilB (pilB) for the overlay function
-    overlay = overlay_distance_heatmap(pilB, pred_dT_full, N, idx)
+    overlay = overlay_distance_heatmap(pilB, sim, N, idx)
     info = f"Patch A index: {idx} → grid {int(np.sqrt(N))}×{int(np.sqrt(N))}"
     return overlay, info
 
@@ -233,17 +212,3 @@ with demo:
 if __name__ == "__main__":
     demo.launch()
 
-
-# if __name__ == "__main__":
-#
-#     pilA, pilB = Image.open("artifacts/samoyed.jpg"), Image.open("artifacts/samoyed.jpg")
-#     idx = 60 #
-#     pred_dT_full = compute_pred_dT_full_v2(pilA, pilB)
-#     print(pred_dT_full.shape)
-#     assert pred_dT_full.shape[0] % 2 == 0, "pred_dT_full should be even"
-#     N = pred_dT_full.shape[0] // 2
-#     overlay = overlay_distance_heatmap(pilB, pred_dT_full, N, idx)
-#     info = f"Patch A index: {idx} → grid {int(np.sqrt(N))}×{int(np.sqrt(N))}"
-#     print(info)
-#     overlay.show()
-#     # return overlay, info

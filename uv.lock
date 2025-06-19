@@ -3105,6 +3105,7 @@ dev = [
     { name = "pyperclip" },
     { name = "pytest" },
     { name = "pytest-benchmark" },
+    { name = "python-louvain" },
     { name = "ruff" },
     { name = "tabulate" },
     { name = "torch-lr-finder" },
@@ -3157,6 +3158,7 @@ dev = [
     { name = "pyperclip", specifier = ">=1.9.0" },
     { name = "pytest", specifier = ">=8.3.5" },
     { name = "pytest-benchmark", specifier = ">=5.1.0" },
+    { name = "python-louvain", specifier = ">=0.16" },
     { name = "ruff", specifier = ">=0.11.4" },
     { name = "tabulate", specifier = ">=0.9.0" },
     { name = "torch-lr-finder", specifier = ">=0.2.2" },
@@ -3783,6 +3785,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/a2/5a/920447d0292bb0423
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6b/68/505eea781a80ace736d221b7d20180519a8e0c56b4c5c466bdca87120930/python_json_logger-4.0.0.dev0-py3-none-any.whl", hash = "sha256:00e580cc692d1c0a4b2c4f04d2deb7b89c1a195a9e04c9e00f3e7a9930df5fa4", size = 15439 },
 ]
+
+[[package]]
+name = "python-louvain"
+version = "0.16"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "networkx", version = "3.4.2", source = { registry = "https://download.pytorch.org/whl/nightly/cu128" }, marker = "python_full_version < '3.11'" },
+    { name = "networkx", version = "3.5rc0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7c/0d/8787b021d52eb8764c0bb18ab95f720cf554902044c6a5cb1865daf45763/python-louvain-0.16.tar.gz", hash = "sha256:b7ba2df5002fd28d3ee789a49532baad11fe648e4f2117cf0798e7520a1da56b", size = 204641 }
 
 [[package]]
 name = "python-multipart"

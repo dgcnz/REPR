@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Usage: ./select_run.sh
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# Relative-date helper (produces strings like "in 3 hours 15 minutes")
+reldate() {
+    local remains=$1
+    # units: singular, plural, modulus
+    set -- second    s   60 \
+           minut     es  60 \
+           hour      s   24 \
+           day       s    0
+    local date=''
+    while (( $# )); do
+        local unit=$1 plural=$2 n=$3
+        shift 3
+
+        local amount=$remains
+        (( n )) && (( amount %= n ))
+        if (( amount )); then
+            (( amount > 1 )) && unit+=${plural}
+            date="$amount $unit $date"
+            (( remains -= amount ))
+        fi
+        (( n )) && (( remains /= n ))
+    done
+    printf '%s ago' "${date% }"
+}
+# -----------------------------------------------------------------------------
+
+# 1. Gather all runs: "<run-id>    <output-path>    <started-relative>"
+#    then sort by <output-path> descending (newest first)
+mapfile -t runs < <(
+  find outputs \
+       -type d \
+       -path '*/wandb/run-*' -prune -print \
+    | while read -r dir; do
+        raw=$(basename "$dir")                   # "run-20250509_204027-njmjbtrd"
+        raw_id=${raw#run-}                       # "20250509_204027-njmjbtrd"
+        run_id=${raw_id#*-}                      #         "njmjbtrd"
+
+        out_path=$(dirname "$(dirname "$dir")")  # ".../YYYY-MM-DD/HH-MM-SS"
+
+        meta="$dir/files/wandb-metadata.json"
+        if [[ -f $meta ]]; then
+            startedAt=$(jq -r '.startedAt' "$meta")
+            start_epoch=$(date -d "$startedAt" +%s)
+            now=$(date +%s)
+            diff=$(( now > start_epoch ? now - start_epoch : start_epoch - now ))
+            started_rel=$(reldate "$diff")
+        else
+            started_rel="‹unknown›"
+        fi
+
+        printf "%s\t%s\t%s\n" "$run_id" "$out_path" "$started_rel"
+      done \
+    | sort -t$'\t' -k2,2r
+)
+
+# 2. FZF selection
+selected=$(printf '%s\n' "${runs[@]}" \
+  | fzf --ansi \
+        --header="Select a run (ID │ output folder │ started)" \
+        --delimiter=$'\t' --nth=1,2 \
+        --preview='bat --style=numbers --color=always {2}/files/wandb-metadata.json' \
+        --bind 'enter:accept')
+
+if [[ -z $selected ]]; then
+  echo "No run selected." >&2
+  exit 1
+fi
+
+# 3. Extract and print
+run_id=$(cut -f1 <<<"$selected")
+run_path=$(cut -f2 <<<"$selected")
+echo "→ Selected run ${run_id} at ${run_path}"

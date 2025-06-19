@@ -29,7 +29,33 @@ transform = T.Compose(
 def load_model(run_folder: Path, ckpt_name: str) -> torch.nn.Module:
     """Load the pretrained PART model for inference."""
     cfg = OmegaConf.load(run_folder / ".hydra" / "config.yaml")
-    ckpt = torch.load(run_folder / ckpt_name)["model"]
+    if "predict_uncertainty" in cfg["model"]:
+        predict_uncertainty = cfg["model"].pop("predict_uncertainty")
+        if predict_uncertainty:
+            cfg["model"]["uncertainty_mode"] = "additive"
+        else:
+            cfg["model"]["uncertainty_mode"] = "none"
+    elif "uncertainty_mode" in cfg["model"]:
+        pass
+    else:
+        raise ValueError("Uncertainty mode not specified in the config.")
+    print(cfg["model"]["uncertainty_mode"])
+    ckpt_path = run_folder / ckpt_name
+    ckpt = torch.load(ckpt_path, map_location="cuda")
+    state_dict = ckpt["model"]
+    if "pose_head.mu.weight" in state_dict:
+        state_dict["pose_head.mu_proj.weight"] = state_dict.pop("pose_head.mu.weight")
+    if "pose_head.logvar.weight" in state_dict:
+        state_dict["pose_head.disp_proj.weight"] = state_dict.pop("pose_head.logvar.weight")
+    if "pose_head.logvar.bias" in state_dict:
+        state_dict["pose_head.disp_proj.bias"] = state_dict.pop("pose_head.logvar.bias")
+    if "pose_head.gate_proj.weight" in state_dict:
+        if "gate_dim" not in cfg["model"]:
+            cfg["model"]["gate_dim"] = state_dict["pose_head.gate_proj.weight"].shape[0]
+            print(f"Gate dimension not specified in the config, inferring from state_dict: {cfg['model']['gate_dim']}")
+        assert cfg["model"]["gate_dim"] == state_dict["pose_head.gate_proj.weight"].shape[0]
+    if "pose_head.gate_mult" not in state_dict:
+        state_dict["pose_head.gate_mult"] = torch.zeros(1)
     model = hydra.utils.instantiate(
         cfg["model"],
         _target_="src.models.components.partmae_v6.PARTMaskedAutoEncoderViT",
@@ -38,12 +64,12 @@ def load_model(run_folder: Path, ckpt_name: str) -> torch.nn.Module:
         mask_ratio=0.0,
         pos_mask_ratio=1.0,
     )
-    model.load_state_dict(ckpt, strict=True)
+    model.load_state_dict(state_dict, strict=True)
     return model
 
 
 # RUN_FOLDER = Path("outputs/2025-06-13/19-56-13")
-RUN_FOLDER = Path("outputs/2025-06-15/12-46-55")
+RUN_FOLDER = Path("outputs/2025-06-15/22-59-28")
 CKPT_NAME = "last.ckpt"
 # Initialize the model and configure sampler
 model = load_model(RUN_FOLDER, CKPT_NAME).to(DEVICE).eval()

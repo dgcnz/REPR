@@ -1,3 +1,4 @@
+# @package model
 ckpt_mode: backbone
 
 net:
