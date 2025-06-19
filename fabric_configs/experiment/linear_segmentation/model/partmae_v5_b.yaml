@@ -3,17 +3,18 @@ ckpt_path: ???
 
 net:
   _target_: timm.create_model
-  model_name: vit_small_patch16_224
-  pretrained: True
+  model_name: vit_base_patch16_224
+  pretrained: true
   num_classes: 0
+  pretrained_strict: true
   img_size: 448
-  pretrained_strict: True
   norm_layer:
     _target_: torch.nn.LayerNorm
     _partial_: true
   pretrained_cfg_overlay:
     state_dict:
-      _target_: src.models.components.converters.timm.partmae_v6.preprocess
+      _target_: src.models.components.converters.timm.partmae_v5_2.preprocess
       state_dict:
         _target_: torch.load
         f: ${model.ckpt_path}
+
