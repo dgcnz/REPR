@@ -8,7 +8,6 @@
 # data=voc \
 # model.pretrained_cfg_overlay.state_dict.state_dict.f=$(ls -d outputs/2025-05-29/12-10-52/*  | grep epoch | paste -sd, -)
 
-import re
 import logging
 from pathlib import Path
 
@@ -16,11 +15,11 @@ import hydra
 import torch
 import wandb
 from hydra.utils import instantiate
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from hbird.hbird_eval import hbird_evaluation # type: ignore 
 
 import timm  # noqa: F401
-from src.utils.io import find_run_id, read_wandb_project_from_config
+from src.utils.io import validate_checkpoint
 
 
 def _convnext_patch_size(model: torch.nn.Module) -> int:
@@ -100,24 +99,6 @@ def attach_artifact_if_missing(ckpt_path: Path, run_id: str, project: str) -> No
     print(f"LOGGED {artifact_name} to {run_ref}")
     resume.finish()
 
-
-def validate_checkpoint(ckpt_path: Path) -> tuple[int, str, str, dict]:
-    """Validate ckpt_path and return (step, run_id, project, config)."""
-    if not ckpt_path.exists():
-        raise FileNotFoundError(f"checkpoint {ckpt_path} not found")
-    state = torch.load(ckpt_path, map_location="cpu")
-    ckpt_step = int(state["global_step"])
-    m = re.search(r"step_(\d+)\.ckpt", ckpt_path.name)
-    if m and int(m.group(1)) != ckpt_step:
-        raise ValueError(
-            f"step mismatch: filename step {m.group(1)} != global_step {ckpt_step}"
-        )
-    output_dir = ckpt_path.parent
-    run_id = find_run_id(output_dir / "wandb")
-    config_path = output_dir / ".hydra" / "config.yaml"
-    project = read_wandb_project_from_config(config_path)
-    config = OmegaConf.to_container(OmegaConf.load(config_path), resolve=False)
-    return ckpt_step, run_id, project, config
 
 
 def setup_wandb_logging(cfg: DictConfig):

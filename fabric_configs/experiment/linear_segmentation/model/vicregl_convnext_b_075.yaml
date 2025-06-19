@@ -1,0 +1,21 @@
+ckpt_mode: backbone
+
+net:
+  _target_: timm.create_model
+  model_name: convnext_base
+  pretrained: true
+  num_classes: 0
+  head_norm_first: true
+  ls_init_value: 1
+  pretrained_strict: true
+  pretrained_cfg_overlay:
+    state_dict:
+      _target_: src.models.components.converters.timm.vicregl.preprocess
+      state_dict:
+        _target_: torch.hub.load_state_dict_from_url
+        url: "https://dl.fbaipublicfiles.com/vicregl/convnext_base_alpha0.75.pth"
+      model_name: convnext_base
+
+inference_fn:
+  _target_: src.utils.timm_utils.forward_features_convnext
+  _partial_: true

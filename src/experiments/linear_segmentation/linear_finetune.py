@@ -29,7 +29,7 @@ from src.experiments.utils.linear_finetuning_transforms import (
     ToTensor,
     SepTransforms,
 )
-from src.experiments.utils.timm_seg_utils import extract_feature_map, timm_patch_size
+from src.utils.timm_utils import timm_patch_size, timm_embed_dim
 from src.utils.io import find_run_id
 
 # from src.models.vit_clip_exp import vit_base as vit_clip_base
@@ -187,8 +187,10 @@ def main(cfg: DictConfig) -> None:
 
     # Init backbone and linear head
     backbone = instantiate(cfg.model.net, _convert_="all")
+    inference_fn = instantiate(cfg.model.inference_fn, _partial_=True)
     model = LinearFinetune(
         net=backbone,
+        inference_fn=inference_fn,
         num_classes=num_classes,
         lr=train_config.lr,
         input_size=input_size,
@@ -240,6 +242,7 @@ class LinearFinetune(pl.LightningModule):
     def __init__(
         self,
         net: nn.Module,
+        inference_fn: callable,
         num_classes: int,
         lr: float,
         input_size: int,
@@ -262,7 +265,8 @@ class LinearFinetune(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(ignore=["net"])
         self.model = net
-        in_ch = net.embed_dim
+        self.inference_fn = inference_fn
+        in_ch = timm_embed_dim(net)
         self.finetune_head = nn.Conv2d(in_ch, num_classes, 1)
 
         self.criterion = torch.nn.CrossEntropyLoss(ignore_index=ignore_index)
@@ -299,7 +303,7 @@ class LinearFinetune(pl.LightningModule):
         self.model.eval()
 
         with torch.no_grad():
-            tokens = extract_feature_map(self.model, imgs)
+            tokens = self.inference_fn(self.model, imgs)
             tokens = nn.functional.interpolate(
                 tokens,
                 size=(self.train_mask_size, self.train_mask_size),
@@ -325,7 +329,7 @@ class LinearFinetune(pl.LightningModule):
         if self.val_iters is None or batch_idx < self.val_iters:
             with torch.no_grad():
                 imgs, masks = batch
-                tokens = extract_feature_map(self.model, imgs)
+                tokens = self.inference_fn(self.model, imgs)
                 tokens = nn.functional.interpolate(
                     tokens,
                     size=(self.val_mask_size, self.val_mask_size),

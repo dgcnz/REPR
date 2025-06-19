@@ -21,7 +21,9 @@ def preprocess(state_dict, model_name: str = "convnext_small") -> dict[str, Any]
 
 if __name__ == "__main__":
     import timm
-    version = "base" # or "small"
+    from src.utils.timm_utils import forward_features_convnext
+
+    version = "base"  # or "small"
     # url = "https://dl.fbaipublicfiles.com/vicregl/convnext_small_alpha0.75.pth"
     url = f"https://dl.fbaipublicfiles.com/vicregl/convnext_{version}_alpha0.75.pth"
     repo = torch.hub.load(
@@ -43,10 +45,11 @@ if __name__ == "__main__":
     )
     timm_model.eval()
 
-    x = torch.randn(1, 3, 224, 224)
+    x = torch.randn(1, 3, 448, 448)
     with torch.no_grad():
         repo_tokens, _ = repo.forward_features(x)
-        feats = timm_model.forward_features(x)
+        feats = forward_features_convnext(timm_model, x)
+        # feats = timm_model.forward_features(x)
         b, c, h, w = feats.shape
         print(repo_tokens.shape, feats.shape)
         timm_tokens = feats.flatten(2, 3).transpose(1, 2)
