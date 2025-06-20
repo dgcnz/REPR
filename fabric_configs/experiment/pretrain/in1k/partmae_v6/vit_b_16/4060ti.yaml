@@ -1,19 +1,24 @@
 # @package _global_
 defaults:
   - pretrain/in1k/partmae_v6/vit_b_16/_base
+  - override /data: in1k_snellius
 
 compile: False
+
+total_batch_size: 1
 
 trainer:
   max_epochs: 200
   accelerator: gpu
-  # limit_train_batches: 128
-  accumulate_grad_batches: 8
+  num_nodes: 1
+  devices: 1
+
+warmup_epochs: 10
 
 scheduler:
-  warmup_t: 6250
-  t_initial: 125000
+  warmup_t: ${eval:${warmup_epochs} * ${steps_per_epoch}} # 10 epochs * 625 steps/epoch
+  t_initial: ${eval:${trainer.max_epochs} * ${steps_per_epoch}} # 200 epochs * 625 steps/epoch
 
 train_dataloader:
-  batch_size: 128
-  num_workers: 8
+  batch_size: 1
+  num_workers: 1
