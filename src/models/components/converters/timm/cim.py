@@ -1,17 +1,6 @@
-# Converter for CIM checkpoints to timm VisionTransformer
-from __future__ import annotations
-
 from typing import Mapping, Any
 
-import torch
-import timm
-import numpy as np
-
 from torch import Tensor
-
-from src.models.components.cim import cim_vit_small_patch16
-
-__all__ = ["preprocess"]
 
 
 def preprocess(state_dict: Mapping[str, Any]) -> dict[str, Tensor]:
@@ -19,13 +8,15 @@ def preprocess(state_dict: Mapping[str, Any]) -> dict[str, Tensor]:
     state_dict = state_dict.get("model", state_dict)
     filtered: dict[str, Tensor] = {}
     for k, v in state_dict.items():
-        if k.startswith((
-            "decoder_",
-            "patch_embed_c",
-            "blocks_c",
-            "norm_c",
-            "decoder_g_embed_c",
-        )):
+        if k.startswith(
+            (
+                "decoder_",
+                "patch_embed_c",
+                "blocks_c",
+                "norm_c",
+                "decoder_g_embed_c",
+            )
+        ):
             continue
         if k.endswith(".num_batches_tracked"):
             continue
@@ -34,6 +25,11 @@ def preprocess(state_dict: Mapping[str, Any]) -> dict[str, Tensor]:
 
 
 if __name__ == "__main__":
+    import timm
+    import numpy as np
+    from src.models.components.cim import cim_vit_small_patch16
+    import torch
+
     # Patch deprecated numpy attribute for positional embedding initialization
     if not hasattr(np, "float"):
         np.float = np.float64  # type: ignore[attr-defined]
