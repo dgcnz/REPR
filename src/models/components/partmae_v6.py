@@ -712,8 +712,8 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             # [B,M,D] x [B,D,V] → [B,M,V]
             cosine = torch.bmm(proj_patches, proj_cls.transpose(1, 2))
             # pick the correct view column for each token without gather on D‑dim
-            cosine = cosine[:, torch.arange(self.N, device=z.device), self.view_ids_N]
-            cls_w = torch.softmax(cosine / self.tau, dim=1)  # [B, M]
+            cls_w = cosine[:, torch.arange(self._N, device=z.device), self.view_ids_N]
+            cls_w = torch.softmax(cls_w / self.tau, dim=1)  # [B, M]
             cls_w = _drop_pos(cls_w[..., None], joint_ids_remove).squeeze(-1)
         else:
             cls_w = None
@@ -828,7 +828,7 @@ if __name__ == "__main__":
         num_views=V,
         pos_embed_mode="sincos",
         decoder_from_proj=True,
-        tau=0.1,
+        tau=0.07,
     ).to(DEVICE)
     t = ParametrizedMultiCropV4(n_global_crops=gV, n_local_crops=lV, distort_color=True)
     print(t.compute_max_scale_ratio_aug())  # <5.97
@@ -847,7 +847,9 @@ if __name__ == "__main__":
 
     import contextlib
 
-    with contextlib.nullcontext():
+    ctx = contextlib.nullcontext
+    ctx = torch.no_grad
+    with ctx():
         dataset = MockedDataset(t)
         seed_everything(42)
         loader = torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=False)
@@ -861,8 +863,9 @@ if __name__ == "__main__":
         seed_everything(42)
         out = backbone(*batch)
         print("Output keys:", out.keys())
-        out["loss"].backward()
+        # out["loss"].backward()
         print("ok backward")
+        print(out["loss_pose_t"])
 
     # print(out["loss_pose"])
     sd = backbone.state_dict()

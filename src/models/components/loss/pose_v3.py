@@ -248,6 +248,7 @@ class PoseLoss(nn.Module):
             nll.diagonal(dim1=1, dim2=2).fill_(0.0)
 
         if cls_w is not None:
+           cls_w = cls_w * cls_w.size(1) # keep the same scale as the original loss 
            nll = nll * cls_w.unsqueeze(2).unsqueeze(-1)  # [B,M,1,K]
            nll = nll * cls_w.unsqueeze(1).unsqueeze(-1)  # [B,1,M,K]
 
