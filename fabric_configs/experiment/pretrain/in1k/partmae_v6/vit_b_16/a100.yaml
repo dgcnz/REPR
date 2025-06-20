@@ -5,18 +5,20 @@ defaults:
 
 compile: False
 
+total_batch_size: 1024
+
 trainer:
   max_epochs: 200
   accelerator: gpu
   strategy: ddp
   num_nodes: 1
   devices: 4
-  accumulate_grad_batches: 2
 
+warmup_epochs: 10
 scheduler:
   # 625 steps per epoch when effective batch size is 2048
-  warmup_t: 6250 # 10 epochs * 625 steps/epoch
-  t_initial: 125000 # 200 epochs * 625 steps/epoch
+  warmup_t: ${eval:{warmup_epochs} * ${steps_per_epoch}} # 10 epochs * 625 steps/epoch
+  t_initial: ${eval:{trainer.max_epochs} * ${steps_per_epoch}} # 200 epochs * 625 steps/epoch
 
 train_dataloader:
   batch_size: 256
