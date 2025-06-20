@@ -56,7 +56,6 @@ model:
   criterion: l1
   alpha_s: 1.0
   num_views: ${eval:${data.transform.n_global_crops} + ${data.transform.n_local_crops}}
-  segment_embed_mode: none
   apply_tanh: false
   pos_embed_mode: learn
   ls_init_values: null
