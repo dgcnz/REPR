@@ -755,11 +755,12 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # PROJECTOR
         proj_z = self.dino_head(z)
         proj_cls = proj_z[:, :V]
+        proj_z = torch.cat([proj_cls.detach(), proj_z[:, V:]], dim=1)
         gt_dT = self._compute_gt(joint_pos, params, self.Ns)
         patch_pos_nopos = _drop_pos(joint_pos, joint_ids_remove)
         # TRANSFORMER DECODER
-        dec_input = proj_z if self.decoder_from_proj else z
-        losses = self.forward_pose_loss(dec_input, gt_dT, joint_ids_remove)
+
+        losses = self.forward_pose_loss(proj_z, gt_dT, joint_ids_remove)
         # joint_cls: [B, V, D]
         # teacher is just the cls of the global views
         losses.update(self._cinv_loss(proj_cls, proj_cls[:, : self._gV].detach()))
@@ -813,9 +814,11 @@ if __name__ == "__main__":
     from PIL import Image
     import torch.utils._pytree as pytree
     from lightning import seed_everything
+    # enable anomaly deetection
+    torch.autograd.set_detect_anomaly(True)
 
     seed_everything(42)
-    DEVICE = "cpu"
+    DEVICE = "cuda"
     gV, lV = 2, 10
     V = gV + lV
 
@@ -858,6 +861,8 @@ if __name__ == "__main__":
         seed_everything(42)
         out = backbone(*batch)
         print("Output keys:", out.keys())
+        out["loss"].backward()
+        print("ok backward")
 
     # print(out["loss_pose"])
     sd = backbone.state_dict()

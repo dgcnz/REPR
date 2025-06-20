@@ -62,8 +62,12 @@ class PoseHead(nn.Module):
             if self.gate_dim == 0:
                 self.gate_proj = nn.Identity()
                 self.gate_init = math.log(5e-3)
+                # self.gate_mult = nn.Parameter(
+                #     torch.tensor(self.gate_init / self.beta), requires_grad=True
+                # )
                 self.gate_mult = nn.Parameter(
-                    torch.tensor(self.gate_init / self.beta), requires_grad=True
+                    torch.full((self.num_targets,), self.gate_init / self.beta),
+                    requires_grad=True,
                 )
             else:
                 self.gate_proj = nn.Linear(gate_in_dim, self.gate_dim, bias=False)
