@@ -223,6 +223,7 @@ class PoseLoss(nn.Module):
         pred: dict[str, Tensor],
         gt_dT: Tensor,
         Ms: list[int],
+        cls_w: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """
         pred: (mu_dT, logdisp_dT or None)
@@ -241,6 +242,10 @@ class PoseLoss(nn.Module):
             nll = self.nll_a * (nll / disp_pair + logdisp + self.nll_c)
             # set diagonal to 0
             nll.diagonal(dim1=1, dim2=2).fill_(0.0)
+
+        if cls_w is not None:
+           nll = nll * cls_w.unsqueeze(2).unsqueeze(-1)  # [B,M,1,K]
+           nll = nll * cls_w.unsqueeze(1).unsqueeze(-1)  # [B,1,M,K]
 
         # 2) decompose into intra/inter & spatial/temporal exactly as before
         total = nll.sum(dim=(0, 1, 2))  # [K]

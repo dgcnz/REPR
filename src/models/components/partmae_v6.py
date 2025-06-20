@@ -126,6 +126,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         ls_init_values: float = 0.0,  # 1e-5 for dinov2
         pos_embed_mode: str = "sincos",  # "sincos" or "learn"
         # ..
+        tau=None,
         bypass_loss: bool = False,  # bypass loss modules
     ):
         """ """
@@ -191,6 +192,12 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         self.norm: nn.Module = norm_layer(embed_dim)
         self.decoder_embed_dim = decoder_embed_dim
         self.decoder_from_proj = decoder_from_proj
+        self.tau = tau
+        if tau:
+            assert decoder_from_proj, (
+                "tau is only supported with decoder_from_proj=True"
+            )
+        assert decoder_from_proj, "decoder_from_proj=True is required in v6"
         dec_in_dim = proj_bottleneck_dim if decoder_from_proj else embed_dim
         self.decoder_embed = nn.Linear(dec_in_dim, decoder_embed_dim, bias=True)
         self.decoder_blocks = nn.ModuleList(
@@ -695,10 +702,23 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             return {}
         z = self.forward_decoder(proj_z)
         z_nopos = _drop_pos(z[:, self.num_views :, :], joint_ids_remove)
-        proj_z = _drop_pos(proj_z[:, self.num_views :, :], joint_ids_remove)
-        pose_out = self.pose_head(z_nopos, proj_z)
+        proj_z_nopos = _drop_pos(proj_z[:, self.num_views :, :], joint_ids_remove)
+        pose_out = self.pose_head(z_nopos, proj_z_nopos)
         gt_dT_nopos = drop_pos_2d(gt_dT, joint_ids_remove)  # check
-        pose_loss_out = self._pose_loss(pose_out, gt_dT_nopos, self._Ms)
+
+        if self.tau:
+            proj_cls = proj_z[:, : self.num_views, :].detach()
+            proj_patches = proj_z[:, self.num_views :, :].detach()
+            # [B,M,D] x [B,D,V] → [B,M,V]
+            cosine = torch.bmm(proj_patches, proj_cls.transpose(1, 2))
+            # pick the correct view column for each token without gather on D‑dim
+            cosine = cosine[:, torch.arange(self.N, device=z.device), self.view_ids_N]
+            cls_w = torch.softmax(cosine / self.tau, dim=1)  # [B, M]
+            cls_w = _drop_pos(cls_w[..., None], joint_ids_remove).squeeze(-1)
+        else:
+            cls_w = None
+
+        pose_loss_out = self._pose_loss(pose_out, gt_dT_nopos, self._Ms, cls_w)
         return {
             **pose_out,
             **pose_loss_out,
@@ -735,7 +755,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # PROJECTOR
         proj_z = self.dino_head(z)
         proj_cls = proj_z[:, :V]
-        proj_patches = proj_z[:, V:]
         gt_dT = self._compute_gt(joint_pos, params, self.Ns)
         patch_pos_nopos = _drop_pos(joint_pos, joint_ids_remove)
         # TRANSFORMER DECODER
@@ -745,11 +764,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         # teacher is just the cls of the global views
         losses.update(self._cinv_loss(proj_cls, proj_cls[:, : self._gV].detach()))
         losses.update(self._ccr_loss(proj_cls))
-        # losses["loss_psmooth"] = self._psmooth_loss(proj_patches, gt_dT)
-        # losses["loss_pstress"] = self._pstress_loss(proj_patches, gt_dT)
-        losses.update(self._pmatch_loss(proj_patches, gt_dT))
-        losses.update(self._pcr_loss(proj_patches))
-        # losses["loss_cosa"] = self._cosa_loss(pred_dT_nopos, gt_dT_nopos)
 
         loss = torch.stack(
             [self.lambdas[k] * losses[k] for k in self.lambdas if k in losses]
@@ -762,7 +776,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         }
 
 
-def PART_mae_vit_base_patch16_dec512d8b(**kwargs):
+def vit_base_patch16(**kwargs):
     model = PARTMaskedAutoEncoderViT(
         patch_size=16,
         embed_dim=768,
@@ -778,10 +792,21 @@ def PART_mae_vit_base_patch16_dec512d8b(**kwargs):
     return model
 
 
-# set recommended archs
-PART_mae_vit_base_patch16 = (
-    PART_mae_vit_base_patch16_dec512d8b  # decoder: 512 dim, 8 blocks
-)
+def vit_small_patch16(**kwargs):
+    model = PARTMaskedAutoEncoderViT(
+        patch_size=16,
+        embed_dim=384,
+        depth=12,
+        num_heads=6,
+        decoder_embed_dim=256,
+        decoder_depth=8,
+        decoder_num_heads=8,
+        mlp_ratio=4,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6),
+        **kwargs,
+    )
+    return model
+
 
 if __name__ == "__main__":
     from src.data.components.transforms.multi_crop_v4 import ParametrizedMultiCropV4
@@ -790,16 +815,18 @@ if __name__ == "__main__":
     from lightning import seed_everything
 
     seed_everything(42)
+    DEVICE = "cpu"
     gV, lV = 2, 10
     V = gV + lV
 
-    backbone = (
-        PART_mae_vit_base_patch16(
-            pos_mask_ratio=0.75, mask_ratio=0.75, num_views=V, pos_embed_mode="sincos"
-        )
-        .cuda()
-        .eval()
-    )
+    backbone = vit_base_patch16(
+        pos_mask_ratio=0.75,
+        mask_ratio=0.75,
+        num_views=V,
+        pos_embed_mode="sincos",
+        decoder_from_proj=True,
+        tau=0.1,
+    ).to(DEVICE)
     t = ParametrizedMultiCropV4(n_global_crops=gV, n_local_crops=lV, distort_color=True)
     print(t.compute_max_scale_ratio_aug())  # <5.97
 
@@ -815,7 +842,9 @@ if __name__ == "__main__":
         def __len__(self):
             return self.n
 
-    with torch.no_grad(), torch.amp.autocast("cuda", dtype=torch.bfloat16):
+    import contextlib
+
+    with contextlib.nullcontext():
         dataset = MockedDataset(t)
         seed_everything(42)
         loader = torch.utils.data.DataLoader(dataset, batch_size=4, shuffle=False)
@@ -823,7 +852,7 @@ if __name__ == "__main__":
         batch = next(iter(loader))
         seed_everything(42)
         batch = pytree.tree_map_only(
-            Tensor, lambda x: x.cuda(), batch
+            Tensor, lambda x: x.to(DEVICE), batch
         )  # Move to GPU if available
 
         seed_everything(42)
