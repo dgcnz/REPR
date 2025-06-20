@@ -15,6 +15,7 @@ from src.utils import pylogger
 
 log = pylogger.RankedLogger(__name__)
 
+
 def train_one_epoch(
     fabric: Fabric,
     model: nn.Module,
@@ -63,32 +64,23 @@ def train_one_epoch(
             torch.compiler.cudagraph_mark_step_begin()
 
             optimizer.zero_grad()
-            nan_flag = False
-            # Accumulate gradients over multiple batches
-            for i in range(accum_iter):
-                batch = next(data_iter)
-
-                fabric.call("on_train_forward_start", **ctx(global_step))
-                outputs = model(*batch)
-                fabric.call("on_train_forward_end", **ctx(global_step))
-
-                loss = outputs["loss"] / accum_iter
-                if torch.isnan(loss) or torch.isinf(loss):
-                    nan_flag = True
-                    break
-
-                nan_counter = 0
-                with fabric.no_backward_sync(model, enabled=bool(i < accum_iter - 1)):
-                    fabric.call("on_train_backward_start", **ctx(global_step))
-                    fabric.backward(loss)
-                    fabric.call("on_train_backward_end", **ctx(global_step))
-            if nan_flag:
-                log.warning(f"Loss is NaN or Inf at step {global_step}. Skipping batch.")
+            outputs, batch = train_one_step(
+                fabric,
+                model,
+                accum_iter,
+                data_iter,
+                global_step,
+                ctx,
+            )
+            if outputs is None:
+                log.warning(
+                    f"Loss is NaN at step {step} of epoch {epoch}. Skipping step."
+                )
                 nan_counter += 1
-                if nan_counter > 10:
-                    log.error("Too many NaN/Inf losses encountered. Stopping training.")
-                    raise RuntimeError("Training stopped due to NaN/Inf losses.")
+                if nan_counter >= 5:
+                    raise RuntimeError("Too many NaN losses. Stopping training.")
                 continue
+            nan_counter = 0
 
             # Process is now at the end of accumulation or dataset
             outputs = apply_to_collection(outputs, Tensor, lambda x: x.detach())
@@ -99,7 +91,9 @@ def train_one_epoch(
 
             # Gradient clipping if enabled
             if clip_grad is not None and clip_grad > 0:
-                fabric.clip_gradients(model, optimizer, max_norm=clip_grad, error_if_nonfinite=False)
+                fabric.clip_gradients(
+                    model, optimizer, max_norm=clip_grad, error_if_nonfinite=False
+                )
 
             fabric.call("on_train_optimizer_step_start", **ctx(global_step))
             optimizer.step()
@@ -123,6 +117,33 @@ def train_one_epoch(
     log.debug(f"Epoch {epoch} ended.")
     fabric.call("on_train_epoch_end", **ctx(global_step))
     return global_step
+
+
+def train_one_step(
+    fabric: Fabric,
+    model: nn.Module,
+    accum_iter: int,
+    data_iter: iter,
+    global_step: int,
+    ctx: callable,
+):
+    for i in range(accum_iter):
+        batch = next(data_iter)
+
+        fabric.call("on_train_forward_start", **ctx(global_step))
+        outputs = model(*batch)
+        fabric.call("on_train_forward_end", **ctx(global_step))
+
+        loss = outputs["loss"] / accum_iter
+        if not torch.isfinite(loss.detach()):
+            return None, None
+
+        with fabric.no_backward_sync(model, enabled=bool(i < accum_iter - 1)):
+            fabric.call("on_train_backward_start", **ctx(global_step))
+            fabric.backward(loss)
+            fabric.call("on_train_backward_end", **ctx(global_step))
+
+    return outputs, batch
 
 
 @torch.no_grad()
