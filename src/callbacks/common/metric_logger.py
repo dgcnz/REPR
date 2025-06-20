@@ -12,12 +12,14 @@ class MetricLogger(object):
 
     def __init__(self, every_n_steps: int = 0):
         self.every_n_steps = every_n_steps
+        self._has_updates = False
 
     def on_train_start(
         self, fabric: Fabric, metric_collection: Metric, **kwargs
     ) -> None:
         """Initialize metrics at the start of training."""
         metric_collection.reset()
+        self._has_updates = False
 
     def _log(self, fabric: Fabric, global_step: int, metrics: dict[str, Any]):
         if fabric.is_global_zero:
@@ -41,6 +43,7 @@ class MetricLogger(object):
     ) -> None:
         """Log current learning rate at the start of each training epoch."""
         self._log_lr(fabric, global_step, optimizer)
+        self._has_updates = False
 
     def on_train_batch_end(
         self,
@@ -55,6 +58,7 @@ class MetricLogger(object):
     ) -> None:
         """Update metrics at the end of each training batch."""
         metric_collection.update(outputs)
+        self._has_updates = True
         if self.every_n_steps and batch_idx % self.every_n_steps == 0:
             self._compute_and_log(
                 fabric,
@@ -90,9 +94,13 @@ class MetricLogger(object):
         optimizer: torch.optim.Optimizer,
     ) -> None:
         """Compute and log metrics."""
+        if not self._has_updates:
+            return
+
         final_metrics = metric_collection.compute()
         train_metrics = {f"train/{k}": v for k, v in final_metrics.items()}
         train_metrics["epoch"] = epoch
         self._log(fabric, global_step, train_metrics)
         self._log_lr(fabric, global_step, optimizer)
         metric_collection.reset()
+        self._has_updates = False
