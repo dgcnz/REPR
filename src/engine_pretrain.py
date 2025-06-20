@@ -136,7 +136,9 @@ def train_one_step(
 
         loss = outputs["loss"] / accum_iter
         if not torch.isfinite(loss.detach()):
-            return None, None
+            raise ValueError(
+                f"Loss is not finite at step {global_step}: {loss.detach().item()}"
+            )
 
         with fabric.no_backward_sync(model, enabled=bool(i < accum_iter - 1)):
             fabric.call("on_train_backward_start", **ctx(global_step))
