@@ -33,7 +33,7 @@ data:
 
 trainer:
   max_epochs: ???
-  accumulate_grad_batches: ???
+  accumulate_grad_batches: ${eval:${total_batch_size_per_gpu} // ${train_dataloader.batch_size}}
   num_nodes: 1
   devices: 1
   gradient_clip_val: 0.3
