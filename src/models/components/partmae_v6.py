@@ -96,6 +96,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         apply_tanh: bool = False,
         # losses
         lambda_pose: float = 0.6,
+        clamp_nll: float = None,
         # patch losses
         lambda_psmooth: float = 0.0,
         lambda_pstress: float = 0.0,  # stress loss
@@ -248,6 +249,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             alpha_s=alpha_s,
             alpha_ts=alpha_ts,
             uncertainty_mode=uncertainty_mode,
+            clamp_nll=clamp_nll,
         )
         # self._psmooth_loss = PatchSmoothnessLoss(sigma_yx=sigma_yx, sigma_hw=sigma_hw)
         self._pmatch_loss = PatchMatchingLoss(

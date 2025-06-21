@@ -200,6 +200,7 @@ class PoseLoss(nn.Module):
         uncertainty_mode: Literal[
             "none", "additive", "correlated", "correlated_proj"
         ] = "none",
+        clamp_nll: float | None = None,
     ):
         super().__init__()
         assert criterion in ("mse", "l1")
@@ -210,6 +211,7 @@ class PoseLoss(nn.Module):
             "correlated_proj",
             "correlated_only",
         )
+        self.clamp_nll = clamp_nll
         self.criterion_str = criterion
         self.error_fn = torch.square if criterion == "mse" else torch.abs
         # scalar in front of NLL: ½ for Gaussian, 1 for Laplace
@@ -251,6 +253,10 @@ class PoseLoss(nn.Module):
            cls_w = torch.sqrt(cls_w * cls_w.size(1)) # keep the same scale as the original loss 
            nll = nll * cls_w.unsqueeze(2).unsqueeze(-1)  # [B,M,1,K]
            nll = nll * cls_w.unsqueeze(1).unsqueeze(-1)  # [B,1,M,K]
+
+        # clamp the nll to avoid exploding gradients
+        if self.clamp_nll:
+            nll = nll.clamp(max=self.clamp_nll)
 
         # 2) decompose into intra/inter & spatial/temporal exactly as before
         total = nll.sum(dim=(0, 1, 2))  # [K]
