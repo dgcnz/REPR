@@ -16,8 +16,9 @@ from torchvision.transforms.functional import InterpolationMode
 from lightning.pytorch.loggers import WandbLogger
 from tqdm.auto import tqdm
 import wandb
-from torchmetrics import MeanMetric, Metric
+from torchmetrics import MeanMetric, Metric, MinMetric
 from torchmetrics.regression import MeanSquaredError
+from torchmetrics.wrappers.abstract import WrapperMetric
 
 import random
 import torchvision.transforms.functional as TF
@@ -27,6 +28,71 @@ from src.utils import pylogger
 torch.set_float32_matmul_precision("medium")
 
 log = pylogger.RankedLogger(__name__)
+
+
+class TrainMetrics(WrapperMetric):
+    """Wrapper metric for training that consolidates training-specific metrics."""
+    
+    def __init__(self, nan_strategy='disable', sync_on_compute=False):
+        super().__init__()
+        mean_kwargs = {
+            "nan_strategy": nan_strategy,
+            "sync_on_compute": sync_on_compute,
+        }
+        
+        self.metrics = nn.ModuleDict({
+            "loss": MeanMetric(**mean_kwargs),
+        })
+    
+    def update(self, loss):
+        self.metrics["loss"].update(loss)
+    
+    def reset(self):
+        self.metrics["loss"].reset()
+    
+    def compute(self):
+        return {"train/loss": float(self.metrics["loss"].compute())}
+
+
+class ValMetrics(WrapperMetric):
+    """Wrapper metric for validation that consolidates validation-specific metrics."""
+    
+    def __init__(self, nan_strategy='disable', sync_on_compute=False):
+        super().__init__()
+        mean_kwargs = {
+            "nan_strategy": nan_strategy,
+            "sync_on_compute": sync_on_compute,
+        }
+        mse_kwargs = {"sync_on_compute": sync_on_compute}
+        
+        self.metrics = nn.ModuleDict({
+            "rmse": MeanSquaredError(squared=False, **mse_kwargs),
+            "are": AbsoluteRelativeError(),
+            "best_rmse": MinMetric(**mean_kwargs),
+            "best_are": MinMetric(**mean_kwargs),
+        })
+    
+    def update(self, preds, targets):
+        self.metrics["rmse"].update(preds, targets)
+        self.metrics["are"].update(preds, targets)
+        
+        # Update best metrics with current scores
+        current_rmse = float(self.metrics["rmse"].compute())
+        current_are = float(self.metrics["are"].compute())
+        self.metrics["best_rmse"].update(current_rmse)
+        self.metrics["best_are"].update(current_are)
+    
+    def reset(self):
+        self.metrics["rmse"].reset()
+        self.metrics["are"].reset()
+    
+    def compute(self):
+        return {
+            "val/rmse": float(self.metrics["rmse"].compute()),
+            "val/are": float(self.metrics["are"].compute()),
+            "val/best_rmse": float(self.metrics["best_rmse"].compute()),
+            "val/best_are": float(self.metrics["best_are"].compute())
+        }
 
 
 class AbsoluteRelativeError(Metric):
@@ -148,12 +214,12 @@ def train_one_epoch(
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler._LRScheduler,
     fabric: L.Fabric,
-    train_loss_metric: MeanMetric,
+    metrics: TrainMetrics,
     global_step: int,
     epoch: int = 0,
 ):
     model.train()
-    train_loss_metric.reset()
+    metrics.reset()
     train_iter = tqdm(
         train_loader,
         desc=f"Train {epoch}",
@@ -173,12 +239,9 @@ def train_one_epoch(
         fabric.backward(loss)
         optimizer.step()
         optimizer.zero_grad()
-        train_loss_metric.update(loss.detach())
+        metrics.update(loss.detach())
         if fabric.is_global_zero:
-            fabric.log_dict(
-                {"train/loss": float(train_loss_metric.compute())},
-                step=global_step,
-            )
+            fabric.log_dict(metrics.compute(), step=global_step)
         global_step += 1
     scheduler.step()
     return global_step
@@ -187,15 +250,13 @@ def train_one_epoch(
 def run_validation(
     model: nn.Module,
     val_loader: DataLoader,
-    val_rmse_metric: MeanSquaredError,
-    val_are_metric: AbsoluteRelativeError,
+    metrics: ValMetrics,
     fabric: L.Fabric,
     epoch: int,
     global_step: int,
 ):
     model.eval()
-    val_rmse_metric.reset()
-    val_are_metric.reset()
+    metrics.reset()
     val_iter = tqdm(
         val_loader,
         desc="Val",
@@ -210,13 +271,20 @@ def run_validation(
                     size=(model.mask_size, model.mask_size),
                     mode="nearest",
                 )
-        val_rmse_metric.update(preds, depths)
-        val_are_metric.update(preds, depths)
-    rmse = float(val_rmse_metric.compute())
-    are = float(val_are_metric.compute())
+        metrics.update(preds, depths)
+    
+    # Get computed metrics for logging and console output
+    computed_metrics = metrics.compute()
+    rmse = computed_metrics["val/rmse"]
+    are = computed_metrics["val/are"]
+    best_rmse = computed_metrics["val/best_rmse"]
+    best_are = computed_metrics["val/best_are"]
+    
     log.info(f"Epoch {epoch:02d} RMSE: {rmse:.4f}, ARE: {are:.4f}")
+    log.info(f"Best RMSE: {best_rmse:.4f}, Best ARE: {best_are:.4f}")
+    
     if fabric.is_global_zero:
-        fabric.log_dict({"val/rmse": rmse, "val/are": are}, step=global_step)
+        fabric.log_dict(computed_metrics, step=global_step)
 
 
 # --- Main Training Script ---
@@ -313,9 +381,10 @@ def main(cfg: DictConfig):
     )
     model, optimizer = fabric.setup(model, optimizer)
     train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
-    train_loss_metric = MeanMetric().to(fabric.device)
-    val_rmse_metric = MeanSquaredError(squared=False).to(fabric.device)
-    val_are_metric = AbsoluteRelativeError().to(fabric.device)
+    
+    # Initialize separate metric wrappers
+    train_metrics = TrainMetrics().to(fabric.device)
+    val_metrics = ValMetrics().to(fabric.device)
 
     # Training loop counters
     global_step = 0
@@ -328,15 +397,14 @@ def main(cfg: DictConfig):
             optimizer=optimizer,
             scheduler=scheduler,
             fabric=fabric,
-            train_loss_metric=train_loss_metric,
+            metrics=train_metrics,
             global_step=global_step,
             epoch=epoch,
         )
         run_validation(
             model=model,
             val_loader=val_loader,
-            val_rmse_metric=val_rmse_metric,
-            val_are_metric=val_are_metric,
+            metrics=val_metrics,
             fabric=fabric,
             epoch=epoch,
             global_step=global_step,

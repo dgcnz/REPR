@@ -1,0 +1,24 @@
+ckpt_mode: checkpoint
+ckpt_path: outputs/2025-04-11/10-15-18/epoch_0199.ckpt
+
+net:
+  _target_: timm.create_model
+  model_name: vit_base_patch16_224
+  pretrained: true
+  num_classes: 0
+  pretrained_strict: true
+  img_size: 448
+  norm_layer:
+    _target_: torch.nn.LayerNorm
+    _partial_: true
+  pretrained_cfg_overlay:
+    state_dict:
+      _target_: src.models.components.converters.timm.partmae_v5_2.preprocess
+      state_dict:
+        _target_: torch.load
+        f: ${model.ckpt_path}
+
+
+inference_fn:
+  _target_: src.utils.timm_utils.forward_features_vit
+  _partial_: true
