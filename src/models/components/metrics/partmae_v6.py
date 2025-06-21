@@ -27,6 +27,8 @@ class V6Metrics(WrapperMetric):
                 "loss_pose_t": MeanMetric(**mean_kwargs),
                 "loss_pose_s": MeanMetric(**mean_kwargs),
                 "loss_pose": MeanMetric(**mean_kwargs),
+                "_loss_pose_t_max": MaxMetric(**mean_kwargs),
+                "_loss_pose_s_max": MaxMetric(**mean_kwargs),
                 # "loss_psmooth": MeanMetric(**mean_kwargs),
                 # "loss_pstress": MeanMetric(**mean_kwargs),
                 "loss_pmatch": MeanMetric(**mean_kwargs),
@@ -77,6 +79,9 @@ class V6Metrics(WrapperMetric):
         for k in self.metrics:
             if k.startswith("loss") and k in outputs:
                 self.metrics[k].update(outputs[k])
+        
+        self.metrics["_loss_pose_t_max"].update(outputs["loss_pose_t"].max())
+        self.metrics["_loss_pose_s_max"].update(outputs["loss_pose_s"].max())
 
         if "pred_dT" in outputs and "gt_dT" in outputs:
             self.metrics["pred_dt_std"].update(outputs["pred_dT"][..., :2].std())
