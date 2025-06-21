@@ -17,3 +17,7 @@ net:
       state_dict:
         _target_: torch.load
         f: ${model.ckpt_path}
+
+inference_fn:
+  _target_: src.utils.timm_utils.forward_features_vit
+  _partial_: true
