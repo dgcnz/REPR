@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
 
+@torch.autocast("cuda", dtype=torch.float64)
 def batched_logdet(
     base: Tensor, z: Tensor, alpha: float, num_chunks: int = 1
 ) -> Tensor:
@@ -27,7 +28,7 @@ def batched_logdet(
     # compute per-chunk log-det sums via list comprehension
     chunk_logs = [
         torch.linalg.cholesky_ex(
-            torch.baddbmm(base, z_chunk.transpose(1, 2), z_chunk, alpha=alpha).float()
+            torch.baddbmm(base, z_chunk.transpose(1, 2), z_chunk, alpha=alpha)
         )[0]
         .diagonal(dim1=-2, dim2=-1)
         .log()
