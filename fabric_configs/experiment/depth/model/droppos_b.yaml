@@ -1,0 +1,20 @@
+ckpt_mode: backbone
+
+net:
+  _target_: timm.create_model
+  model_name: vit_base_patch16_224
+  pretrained: True
+  pretrained_strict: True
+  num_classes: 0
+  img_size: 448
+  pretrained_cfg_overlay:
+    state_dict:
+      _target_: src.models.components.converters.timm.droppos.preprocess
+      state_dict:
+        _target_: torch.load
+        f: artifacts/DropPos_pretrain_vit_base_patch16.pth
+
+
+inference_fn:
+  _target_: src.utils.timm_utils.forward_features_vit
+  _partial_: true

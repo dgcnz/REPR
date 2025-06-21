@@ -16,15 +16,58 @@ from torchvision.transforms.functional import InterpolationMode
 from lightning.pytorch.loggers import WandbLogger
 from tqdm.auto import tqdm
 import wandb
-from torchmetrics import MeanMetric
+from torchmetrics import MeanMetric, Metric
 from torchmetrics.regression import MeanSquaredError
 
+import random
+import torchvision.transforms.functional as TF
 from src.utils.timm_utils import timm_embed_dim, timm_patch_size
 from src.utils import pylogger
 
 torch.set_float32_matmul_precision("medium")
 
 log = pylogger.RankedLogger(__name__)
+
+
+class AbsoluteRelativeError(Metric):
+    """Absolute Relative Error metric for depth estimation."""
+    
+    def __init__(self):
+        super().__init__()
+        self.add_state("sum_error", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("total", default=torch.tensor(0), dist_reduce_fx="sum")
+    
+    def update(self, preds: torch.Tensor, target: torch.Tensor):
+        # Compute absolute relative error: |pred - target| / target
+        # Avoid division by zero by adding small epsilon
+        eps = 1e-6
+        relative_error = torch.abs(preds - target) / (target + eps)
+        self.sum_error += relative_error.sum()
+        self.total += relative_error.numel()
+    
+    def compute(self):
+        return self.sum_error / self.total
+
+
+class PairedRandomCrop:
+    def __init__(self, size, scale=(0.8, 1.0), ratio=(3 /4,4/3)):
+        self.size = size
+        self.scale, self.ratio = scale, ratio
+    def __call__(self, img, depth):
+        i, j, h, w = T.RandomResizedCrop.get_params(img, self.scale, self.ratio)
+        img   = TF.resized_crop(img, i, j, h, w, self.size, interpolation=InterpolationMode.BILINEAR)
+        depth = TF.resized_crop(depth, i, j, h, w, self.size, interpolation=InterpolationMode.NEAREST)
+        return img, depth
+
+class PairedRandomHorizontalFlip:
+    def __init__(self, p=0.5):
+        self.p = p
+    def __call__(self, img, depth):
+        if random.random() < self.p:
+            img   = TF.hflip(img)
+            depth = TF.hflip(depth)
+        return img, depth
+
 
 
 class NYULabeledDataset(Dataset):
@@ -40,6 +83,7 @@ class NYULabeledDataset(Dataset):
         indices: list[int],
         img_transform=None,
         depth_transform=None,
+        joint_transform=None,
     ):
         super().__init__()
         f = h5py.File(mat_path, "r")
@@ -48,6 +92,7 @@ class NYULabeledDataset(Dataset):
         self.indices = indices
         self.img_transform = img_transform
         self.depth_transform = depth_transform
+        self.joint_transform = joint_transform
         assert self.images.ndim == 4, (
             f"Expected images.ndim==4, got {self.images.shape}"
         )
@@ -63,10 +108,11 @@ class NYULabeledDataset(Dataset):
         img = Image.fromarray(self.images[i].transpose(1, 2, 0))  # H,W,C -> C,H,W
         depth = Image.fromarray(self.depths[i])  # H,W
 
+        if self.joint_transform:
+            for t in self.joint_transform:
+                img, depth = t(img, depth)
         img = self.img_transform(img) if self.img_transform else T.ToTensor()(img)
-        depth = (
-            self.depth_transform(depth) if self.depth_transform else T.ToTensor()(depth)
-        )
+        depth = self.depth_transform(depth) if self.depth_transform else T.ToTensor()(depth)
         return img, depth
 
 
@@ -142,12 +188,14 @@ def run_validation(
     model: nn.Module,
     val_loader: DataLoader,
     val_rmse_metric: MeanSquaredError,
+    val_are_metric: AbsoluteRelativeError,
     fabric: L.Fabric,
     epoch: int,
     global_step: int,
 ):
     model.eval()
     val_rmse_metric.reset()
+    val_are_metric.reset()
     val_iter = tqdm(
         val_loader,
         desc="Val",
@@ -163,10 +211,12 @@ def run_validation(
                     mode="nearest",
                 )
         val_rmse_metric.update(preds, depths)
+        val_are_metric.update(preds, depths)
     rmse = float(val_rmse_metric.compute())
-    log.info(f"Epoch {epoch:02d} RMSE: {rmse:.4f}")
+    are = float(val_are_metric.compute())
+    log.info(f"Epoch {epoch:02d} RMSE: {rmse:.4f}, ARE: {are:.4f}")
     if fabric.is_global_zero:
-        fabric.log_dict({"val/rmse": rmse}, step=global_step)
+        fabric.log_dict({"val/rmse": rmse, "val/are": are}, step=global_step)
 
 
 # --- Main Training Script ---
@@ -182,23 +232,33 @@ def main(cfg: DictConfig):
     run.config.update({"tags": cfg.get("tags", [])}, allow_val_change=True)
     logger = WandbLogger(experiment=run)
 
-    # Transforms
-    img_transform = T.Compose(
-        [
-            T.Resize((cfg.train.input_size, cfg.train.input_size)),
-            T.ToTensor(),
-            T.Normalize(mean=cfg.train.img_mean, std=cfg.train.img_std),
-        ]
-    )
-    depth_transform = T.Compose(
-        [
-            T.Resize(
-                (cfg.train.input_size, cfg.train.input_size),
-                interpolation=InterpolationMode.NEAREST,
-            ),
-            T.ToTensor(),
-        ]
-    )
+    joint_transforms = [
+        PairedRandomCrop((cfg.train.input_size, cfg.train.input_size)),
+        PairedRandomHorizontalFlip(p=0.5),
+    ]
+
+    # Image-only photometric + normalization
+    img_transform = T.Compose([
+        T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+        T.ToTensor(),
+        T.Normalize(mean=cfg.train.img_mean, std=cfg.train.img_std),
+    ])
+
+    # Depth-only to-Tensor
+    depth_transform = T.Compose([
+        T.ToTensor(),
+    ])
+
+    # Validation only: a deterministic resize → tensor → normalize
+    val_img_transform = T.Compose([
+        T.Resize((cfg.train.input_size, cfg.train.input_size)),
+        T.ToTensor(),
+        T.Normalize(mean=cfg.train.img_mean, std=cfg.train.img_std),
+    ])
+    val_depth_transform = T.Compose([
+        T.Resize((cfg.train.input_size, cfg.train.input_size), interpolation=InterpolationMode.NEAREST),
+        T.ToTensor(),
+    ])
 
     # Data loaders
     train_ds = NYULabeledDataset(
@@ -206,12 +266,14 @@ def main(cfg: DictConfig):
         indices=list(range(cfg.data.train_split)),
         img_transform=img_transform,
         depth_transform=depth_transform,
+        joint_transform=joint_transforms,
     )
     val_ds = NYULabeledDataset(
         mat_path=cfg.data.mat_path,
         indices=list(range(cfg.data.train_split, cfg.data.total)),
-        img_transform=img_transform,
-        depth_transform=depth_transform,
+        img_transform=val_img_transform,
+        depth_transform=val_depth_transform,
+        joint_transform=None,
     )
     train_loader = DataLoader(
         train_ds,
@@ -253,6 +315,7 @@ def main(cfg: DictConfig):
     train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
     train_loss_metric = MeanMetric().to(fabric.device)
     val_rmse_metric = MeanSquaredError(squared=False).to(fabric.device)
+    val_are_metric = AbsoluteRelativeError().to(fabric.device)
 
     # Training loop counters
     global_step = 0
@@ -273,6 +336,7 @@ def main(cfg: DictConfig):
             model=model,
             val_loader=val_loader,
             val_rmse_metric=val_rmse_metric,
+            val_are_metric=val_are_metric,
             fabric=fabric,
             epoch=epoch,
             global_step=global_step,
