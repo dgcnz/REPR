@@ -32,77 +32,96 @@ log = pylogger.RankedLogger(__name__)
 
 class TrainMetrics(WrapperMetric):
     """Wrapper metric for training that consolidates training-specific metrics."""
-    
-    def __init__(self, nan_strategy='disable', sync_on_compute=False):
+
+    def __init__(self, nan_strategy="disable", sync_on_compute=False):
         super().__init__()
         mean_kwargs = {
             "nan_strategy": nan_strategy,
             "sync_on_compute": sync_on_compute,
         }
-        
-        self.metrics = nn.ModuleDict({
-            "loss": MeanMetric(**mean_kwargs),
-        })
-    
+
+        self.metrics = nn.ModuleDict(
+            {
+                "train/loss": MeanMetric(**mean_kwargs),
+            }
+        )
+
     def update(self, loss):
-        self.metrics["loss"].update(loss)
-    
+        self.metrics["train/loss"].update(loss)
+
     def reset(self):
-        self.metrics["loss"].reset()
-    
+        self.metrics["train/loss"].reset()
+
     def compute(self):
-        return {"train/loss": float(self.metrics["loss"].compute())}
+        return {"train/loss": float(self.metrics["train/loss"].compute())}
 
 
 class ValMetrics(WrapperMetric):
     """Wrapper metric for validation that consolidates validation-specific metrics."""
-    
-    def __init__(self, nan_strategy='disable', sync_on_compute=False):
+
+    def __init__(self, nan_strategy="disable", sync_on_compute=False):
+        super().__init__()
+        mse_kwargs = {"sync_on_compute": sync_on_compute}
+
+        self.metrics = nn.ModuleDict(
+            {
+                "val/rmse": MeanSquaredError(squared=False, **mse_kwargs),
+                "val/are": AbsoluteRelativeError(),
+            }
+        )
+
+    def update(self, preds, targets):
+        self.metrics["val/rmse"].update(preds, targets)
+        self.metrics["val/are"].update(preds, targets)
+
+    def reset(self):
+        self.metrics["val/rmse"].reset()
+        self.metrics["val/are"].reset()
+
+    def compute(self):
+        return {
+            "val/rmse": float(self.metrics["val/rmse"].compute()),
+            "val/are": float(self.metrics["val/are"].compute()),
+        }
+
+
+class BestValMetrics(WrapperMetric):
+    """Wrapper metric for tracking best validation scores across epochs."""
+
+    def __init__(self, nan_strategy="disable", sync_on_compute=False):
         super().__init__()
         mean_kwargs = {
             "nan_strategy": nan_strategy,
             "sync_on_compute": sync_on_compute,
         }
-        mse_kwargs = {"sync_on_compute": sync_on_compute}
-        
-        self.metrics = nn.ModuleDict({
-            "rmse": MeanSquaredError(squared=False, **mse_kwargs),
-            "are": AbsoluteRelativeError(),
-            "best_rmse": MinMetric(**mean_kwargs),
-            "best_are": MinMetric(**mean_kwargs),
-        })
-    
-    def update(self, preds, targets):
-        self.metrics["rmse"].update(preds, targets)
-        self.metrics["are"].update(preds, targets)
-        
-        # Update best metrics with current scores
-        current_rmse = float(self.metrics["rmse"].compute())
-        current_are = float(self.metrics["are"].compute())
-        self.metrics["best_rmse"].update(current_rmse)
-        self.metrics["best_are"].update(current_are)
-    
-    def reset(self):
-        self.metrics["rmse"].reset()
-        self.metrics["are"].reset()
-    
+
+        self.metrics = nn.ModuleDict(
+            {
+                "val/rmse_best": MinMetric(**mean_kwargs),
+                "val/are_best": MinMetric(**mean_kwargs),
+            }
+        )
+
+    def update(self, val_scores_dict):
+        """Update best metrics from validation scores dictionary."""
+        self.metrics["val/rmse_best"].update(val_scores_dict["val/rmse"])
+        self.metrics["val/are_best"].update(val_scores_dict["val/are"])
+
     def compute(self):
         return {
-            "val/rmse": float(self.metrics["rmse"].compute()),
-            "val/are": float(self.metrics["are"].compute()),
-            "val/best_rmse": float(self.metrics["best_rmse"].compute()),
-            "val/best_are": float(self.metrics["best_are"].compute())
+            "val/rmse_best": float(self.metrics["val/rmse_best"].compute()),
+            "val/are_best": float(self.metrics["val/are_best"].compute()),
         }
 
 
 class AbsoluteRelativeError(Metric):
     """Absolute Relative Error metric for depth estimation."""
-    
+
     def __init__(self):
         super().__init__()
         self.add_state("sum_error", default=torch.tensor(0.0), dist_reduce_fx="sum")
         self.add_state("total", default=torch.tensor(0), dist_reduce_fx="sum")
-    
+
     def update(self, preds: torch.Tensor, target: torch.Tensor):
         # Compute absolute relative error: |pred - target| / target
         # Avoid division by zero by adding small epsilon
@@ -110,30 +129,36 @@ class AbsoluteRelativeError(Metric):
         relative_error = torch.abs(preds - target) / (target + eps)
         self.sum_error += relative_error.sum()
         self.total += relative_error.numel()
-    
+
     def compute(self):
         return self.sum_error / self.total
 
 
 class PairedRandomCrop:
-    def __init__(self, size, scale=(0.8, 1.0), ratio=(3 /4,4/3)):
+    def __init__(self, size, scale=(0.8, 1.0), ratio=(3 / 4, 4 / 3)):
         self.size = size
         self.scale, self.ratio = scale, ratio
+
     def __call__(self, img, depth):
         i, j, h, w = T.RandomResizedCrop.get_params(img, self.scale, self.ratio)
-        img   = TF.resized_crop(img, i, j, h, w, self.size, interpolation=InterpolationMode.BILINEAR)
-        depth = TF.resized_crop(depth, i, j, h, w, self.size, interpolation=InterpolationMode.NEAREST)
+        img = TF.resized_crop(
+            img, i, j, h, w, self.size, interpolation=InterpolationMode.BILINEAR
+        )
+        depth = TF.resized_crop(
+            depth, i, j, h, w, self.size, interpolation=InterpolationMode.NEAREST
+        )
         return img, depth
+
 
 class PairedRandomHorizontalFlip:
     def __init__(self, p=0.5):
         self.p = p
+
     def __call__(self, img, depth):
         if random.random() < self.p:
-            img   = TF.hflip(img)
+            img = TF.hflip(img)
             depth = TF.hflip(depth)
         return img, depth
-
 
 
 class NYULabeledDataset(Dataset):
@@ -178,7 +203,9 @@ class NYULabeledDataset(Dataset):
             for t in self.joint_transform:
                 img, depth = t(img, depth)
         img = self.img_transform(img) if self.img_transform else T.ToTensor()(img)
-        depth = self.depth_transform(depth) if self.depth_transform else T.ToTensor()(depth)
+        depth = (
+            self.depth_transform(depth) if self.depth_transform else T.ToTensor()(depth)
+        )
         return img, depth
 
 
@@ -250,13 +277,14 @@ def train_one_epoch(
 def run_validation(
     model: nn.Module,
     val_loader: DataLoader,
-    metrics: ValMetrics,
+    val_metrics: ValMetrics,
+    best_val_metrics: BestValMetrics,
     fabric: L.Fabric,
     epoch: int,
     global_step: int,
 ):
     model.eval()
-    metrics.reset()
+    val_metrics.reset()
     val_iter = tqdm(
         val_loader,
         desc="Val",
@@ -271,20 +299,22 @@ def run_validation(
                     size=(model.mask_size, model.mask_size),
                     mode="nearest",
                 )
-        metrics.update(preds, depths)
-    
-    # Get computed metrics for logging and console output
-    computed_metrics = metrics.compute()
-    rmse = computed_metrics["val/rmse"]
-    are = computed_metrics["val/are"]
-    best_rmse = computed_metrics["val/best_rmse"]
-    best_are = computed_metrics["val/best_are"]
-    
-    log.info(f"Epoch {epoch:02d} RMSE: {rmse:.4f}, ARE: {are:.4f}")
-    log.info(f"Best RMSE: {best_rmse:.4f}, Best ARE: {best_are:.4f}")
-    
+        val_metrics.update(preds, depths)
+
+    # Get current epoch validation scores
+    current_scores = val_metrics.compute()
+    best_val_metrics.update(current_scores)
+    best_scores = best_val_metrics.compute()
+
+    log.info(
+        f"Epoch {epoch:02d} RMSE: {current_scores['val/rmse']:.4f}, ARE: {current_scores['val/are']:.4f}"
+    )
+    log.info(
+        f"Best RMSE: {best_scores['val/rmse_best']:.4f}, Best ARE: {best_scores['val/are_best']:.4f}"
+    )
+
     if fabric.is_global_zero:
-        fabric.log_dict(computed_metrics, step=global_step)
+        fabric.log_dict({**current_scores, **best_scores}, step=global_step)
 
 
 # --- Main Training Script ---
@@ -306,27 +336,38 @@ def main(cfg: DictConfig):
     ]
 
     # Image-only photometric + normalization
-    img_transform = T.Compose([
-        T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-        T.ToTensor(),
-        T.Normalize(mean=cfg.train.img_mean, std=cfg.train.img_std),
-    ])
+    img_transform = T.Compose(
+        [
+            T.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
+            T.ToTensor(),
+            T.Normalize(mean=cfg.train.img_mean, std=cfg.train.img_std),
+        ]
+    )
 
     # Depth-only to-Tensor
-    depth_transform = T.Compose([
-        T.ToTensor(),
-    ])
+    depth_transform = T.Compose(
+        [
+            T.ToTensor(),
+        ]
+    )
 
     # Validation only: a deterministic resize → tensor → normalize
-    val_img_transform = T.Compose([
-        T.Resize((cfg.train.input_size, cfg.train.input_size)),
-        T.ToTensor(),
-        T.Normalize(mean=cfg.train.img_mean, std=cfg.train.img_std),
-    ])
-    val_depth_transform = T.Compose([
-        T.Resize((cfg.train.input_size, cfg.train.input_size), interpolation=InterpolationMode.NEAREST),
-        T.ToTensor(),
-    ])
+    val_img_transform = T.Compose(
+        [
+            T.Resize((cfg.train.input_size, cfg.train.input_size)),
+            T.ToTensor(),
+            T.Normalize(mean=cfg.train.img_mean, std=cfg.train.img_std),
+        ]
+    )
+    val_depth_transform = T.Compose(
+        [
+            T.Resize(
+                (cfg.train.input_size, cfg.train.input_size),
+                interpolation=InterpolationMode.NEAREST,
+            ),
+            T.ToTensor(),
+        ]
+    )
 
     # Data loaders
     train_ds = NYULabeledDataset(
@@ -360,7 +401,9 @@ def main(cfg: DictConfig):
     backbone = instantiate(cfg.model.net, _convert_="all")
     inference_fn = instantiate(cfg.model.inference_fn)
 
-    model = DepthProbe(backbone=backbone, inference_fn=inference_fn, mask_size=cfg.train.mask_size)
+    model = DepthProbe(
+        backbone=backbone, inference_fn=inference_fn, mask_size=cfg.train.mask_size
+    )
     optimizer = AdamW(
         model.head.parameters(),
         lr=cfg.train.lr,
@@ -381,10 +424,11 @@ def main(cfg: DictConfig):
     )
     model, optimizer = fabric.setup(model, optimizer)
     train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
-    
+
     # Initialize separate metric wrappers
     train_metrics = TrainMetrics().to(fabric.device)
     val_metrics = ValMetrics().to(fabric.device)
+    best_val_metrics = BestValMetrics().to(fabric.device)
 
     # Training loop counters
     global_step = 0
@@ -404,12 +448,12 @@ def main(cfg: DictConfig):
         run_validation(
             model=model,
             val_loader=val_loader,
-            metrics=val_metrics,
+            val_metrics=val_metrics,
+            best_val_metrics=best_val_metrics,
             fabric=fabric,
             epoch=epoch,
             global_step=global_step,
         )
-
 
 
 if __name__ == "__main__":
