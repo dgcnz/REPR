@@ -1,0 +1,10 @@
+ckpt_mode: backbone
+net:
+  _target_: timm.create_model
+  model_name: vit_small_patch16_224
+  pretrained: false
+  img_size: 224
+
+inference_fn:
+  _target_: src.utils.timm_utils.forward_features_vit
+  _partial_: true

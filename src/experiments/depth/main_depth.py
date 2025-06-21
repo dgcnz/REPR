@@ -1,5 +1,5 @@
-import os
 import hydra
+from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 import torch
 import torch.nn as nn
@@ -10,9 +10,7 @@ from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 
 import lightning as L  # Lightning Fabric
-import timm
 import h5py
-import numpy as np
 import torchvision.transforms as T
 from torchvision.transforms.functional import InterpolationMode
 from src.utils.timm_utils import timm_embed_dim, timm_patch_size
@@ -52,7 +50,11 @@ class NYULabeledDataset(Dataset):
         return img, depth
 
 # --- Main Training Script ---
-@hydra.main(version_base=None, config_path=None)
+@hydra.main(
+    version_base="1.3",
+    config_path="../../../fabric_configs/experiment/depth",
+    config_name="config",
+)
 def main(cfg: DictConfig):
     # Print config
     print(OmegaConf.to_yaml(cfg))
@@ -70,14 +72,14 @@ def main(cfg: DictConfig):
 
     # Data loaders
     train_ds = NYULabeledDataset(
-        mat_path=cfg.dataset.mat_path,
-        indices=list(range(cfg.dataset.train_split)),
+        mat_path=cfg.data.mat_path,
+        indices=list(range(cfg.data.train_split)),
         img_transform=img_transform,
         depth_transform=depth_transform
     )
-    val_ds   = NYULabeledDataset(
-        mat_path=cfg.dataset.mat_path,
-        indices=list(range(cfg.dataset.train_split, cfg.dataset.total)),
+    val_ds = NYULabeledDataset(
+        mat_path=cfg.data.mat_path,
+        indices=list(range(cfg.data.train_split, cfg.data.total)),
         img_transform=img_transform,
         depth_transform=depth_transform
     )
@@ -91,27 +93,29 @@ def main(cfg: DictConfig):
                               num_workers=cfg.train.num_workers)
 
     # Model
-    backbone = timm.create_model(cfg.model.backbone, pretrained=cfg.model.pretrained)
+    backbone = instantiate(cfg.model.net, _convert_="all")
+    inference_fn = instantiate(cfg.model.inference_fn)
     backbone.head = nn.Identity()
-    for p in backbone.parameters(): p.requires_grad = False
+    for p in backbone.parameters():
+        p.requires_grad = False
 
     class DepthProbe(nn.Module):
         def __init__(self):
             super().__init__()
             self.backbone = backbone
+            self.inference_fn = inference_fn
             self.patch_size = timm_patch_size(backbone)
             self.emb_dim = timm_embed_dim(backbone)
             self.head = nn.Conv2d(self.emb_dim, 1, 1)
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            B, C, H, W = x.shape
-            tokens = self.backbone.forward_features(x)[:, 1:, :]
-            n = H // self.patch_size
-            feat = tokens.transpose(1, 2).view(B, -1, n, n)
-            up = F.interpolate(feat,
-                               scale_factor=self.patch_size,
-                               mode='bilinear',
-                               align_corners=False)
+            feats = self.inference_fn(self.backbone, x)
+            up = F.interpolate(
+                feats,
+                scale_factor=self.patch_size,
+                mode="bilinear",
+                align_corners=False,
+            )
             return self.head(up)
 
     model = DepthProbe()
@@ -153,24 +157,5 @@ def main(cfg: DictConfig):
         rmse = (sum_sq / count)**0.5
         fabric.print(f"Epoch {epoch:02d} RMSE: {rmse:.4f}")
 
-if __name__=='__main__':
-    from omegaconf import OmegaConf
-    cfg = OmegaConf.create({
-        'dataset': {'mat_path':'/mnt/sdb1/datasets/nyuv2/nyu_depth_v2_labeled.mat','train_split':795,'total':1449},
-        'model': {'backbone':'vit_small_patch16_224','pretrained':False},
-        'train': {'batch_size':16,
-                  'num_workers':0,
-                  'lr':1e-3,
-                  'weight_decay':1e-4,
-                  'step_size':10,
-                  'gamma':0.5,
-                  'epochs':10,
-                  'accelerator':'gpu',
-                  'devices':1,
-                  'precision':'16-mixed',
-                  'device':'cuda',
-                  'input_size':224,
-                  'img_mean':[0.485,0.456,0.406],
-                  'img_std':[0.229,0.224,0.225]}
-    })
-    main(cfg)
+if __name__ == "__main__":
+    main()
