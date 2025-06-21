@@ -77,7 +77,7 @@ def train_one_epoch(
                     f"Loss is NaN at step {step} of epoch {epoch}. Skipping step."
                 )
                 nan_counter += 1
-                if nan_counter >= 5:
+                if nan_counter >= 10:
                     raise RuntimeError("Too many NaN losses. Stopping training.")
                 continue
             nan_counter = 0
@@ -135,10 +135,14 @@ def train_one_step(
         fabric.call("on_train_forward_end", **ctx(global_step))
 
         loss = outputs["loss"] / accum_iter
-        if not torch.isfinite(loss.detach()):
-            raise ValueError(
-                f"Loss is not finite at step {global_step}: {loss.detach().item()}"
-            )
+
+        # sync to check if loss is finite
+        with torch.no_grad():
+            nan_flag = 1 - torch.isfinite(loss.detach()).int() # 1 if loss is NaN, 0 otherwise
+            # do an all-reduce max over all ranks
+            res = fabric.all_reduce(nan_flag, op="sum")
+            if res > 0:
+                return None, None
 
         with fabric.no_backward_sync(model, enabled=bool(i < accum_iter - 1)):
             fabric.call("on_train_backward_start", **ctx(global_step))
