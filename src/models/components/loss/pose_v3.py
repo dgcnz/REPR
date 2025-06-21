@@ -111,7 +111,8 @@ class PoseHead(nn.Module):
         out = dict()
 
         h = self.mu_proj(z)  # [B, M, K]
-        out["pred_dT"] = self.tanh(h.unsqueeze(2) - h.unsqueeze(1))  # [B, M, M, K]
+        out["pred_dT"] = self.tanh(h.unsqueeze(2) - h.unsqueeze(1)).clamp(-1.0, -1.0)
+        # [B, M, M, K]
 
         if self.uncertainty_mode == "none":
             return out
@@ -250,14 +251,14 @@ class PoseLoss(nn.Module):
             nll.diagonal(dim1=1, dim2=2).fill_(0.0)
 
         if cls_w is not None:
-           cls_w = torch.sqrt(cls_w * cls_w.size(1)) # keep the same scale as the original loss 
-           nll = nll * cls_w.unsqueeze(2).unsqueeze(-1)  # [B,M,1,K]
-           nll = nll * cls_w.unsqueeze(1).unsqueeze(-1)  # [B,1,M,K]
+            cls_w = torch.sqrt(cls_w * cls_w.size(1))
+            # keep the same scale as the original loss
+            nll = nll * cls_w.unsqueeze(2).unsqueeze(-1)  # [B,M,1,K]
+            nll = nll * cls_w.unsqueeze(1).unsqueeze(-1)  # [B,1,M,K]
 
         # clamp the nll to avoid exploding gradients
         if self.clamp_nll:
             nll = nll.clamp(max=self.clamp_nll)
-
 
         # 2) decompose into intra/inter & spatial/temporal exactly as before
         total = nll.sum(dim=(0, 1, 2))  # [K]

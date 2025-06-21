@@ -100,9 +100,9 @@ optimizer:
     weight_decay: ${..weight_decay}
     filter_bias_and_bn: ${..filter_bias_and_bn}
     param_groups:
-      dino_head: ${eval:2e-4 * ${total_batch_size} / 256}
-      decoder: ${eval:2e-4 * ${total_batch_size} / 256}        
-      pose_head: ${eval:2e-4 * ${total_batch_size} / 256}        
+      dino_head: ${eval:${blr} * ${total_batch_size} / 256}
+      decoder: ${eval:${blr} * ${total_batch_size} / 256}        
+      pose_head: ${eval:${blr} * ${total_batch_size} / 256}        
 
 train_dataloader:
   pin_memory: true
