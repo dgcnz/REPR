@@ -258,6 +258,7 @@ class PoseLoss(nn.Module):
         if self.clamp_nll:
             nll = nll.clamp(max=self.clamp_nll)
 
+
         # 2) decompose into intra/inter & spatial/temporal exactly as before
         total = nll.sum(dim=(0, 1, 2))  # [K]
         t_all = total[0:2].sum()
