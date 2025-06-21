@@ -111,7 +111,7 @@ class PoseHead(nn.Module):
         out = dict()
 
         h = self.mu_proj(z)  # [B, M, K]
-        out["pred_dT"] = self.tanh(h.unsqueeze(2) - h.unsqueeze(1)).clamp(-1.0, -1.0)
+        out["pred_dT"] = self.tanh(h.unsqueeze(2) - h.unsqueeze(1)).clamp(-1.0, 1.0)
         # [B, M, M, K]
 
         if self.uncertainty_mode == "none":
