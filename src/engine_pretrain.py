@@ -140,7 +140,7 @@ def train_one_step(
         with torch.no_grad():
             nan_flag = 1 - torch.isfinite(loss.detach()).int() # 1 if loss is NaN, 0 otherwise
             # do an all-reduce max over all ranks
-            res = fabric.all_reduce(nan_flag, op="sum")
+            res = fabric.all_reduce(nan_flag, reduce_op="sum")
             if res > 0:
                 return None, None
 
