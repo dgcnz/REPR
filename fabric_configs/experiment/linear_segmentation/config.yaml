@@ -6,7 +6,6 @@ defaults:
 # training params
 batch_size: 128
 input_size: 448
-mask_eval_size: 448
 num_workers: 5
 max_epochs: 25
 drop_at: 20
