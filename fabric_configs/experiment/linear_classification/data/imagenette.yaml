@@ -1,0 +1,19 @@
+defaults:
+  - transform: basic_224
+
+train:
+  _target_: torchvision.datasets.Imagenette
+  root: /mnt/sdb1/datasets/imagenette
+  split: train
+  download: true
+  size: 160px
+  transform: ${data.transform}
+val:
+  _target_: torchvision.datasets.Imagenette
+  root: /mnt/sdb1/datasets/imagenette
+  split: val
+  download: true
+  size: 160px
+  transform: ${data.transform}
+num_workers: 0
+pin_memory: true

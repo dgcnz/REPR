@@ -1,281 +1,354 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-# 
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-# 
-#     http://www.apache.org/licenses/LICENSE-2.0
-# 
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-import os
-import argparse
-import json
-from pathlib import Path
 
+import hydra
+from hydra.utils import instantiate
+from omegaconf import DictConfig, OmegaConf
 import torch
 from torch import nn
-import torch.distributed as dist
-import torch.backends.cudnn as cudnn
-from torchvision import datasets
-from torchvision import transforms as pth_transforms
-from torchvision import models as torchvision_models
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
+from lightning.pytorch.loggers import WandbLogger
+import lightning as L  # Lightning Fabric
+import wandb
+from torchmetrics import MeanMetric
+from torchmetrics.classification import MulticlassAccuracy
+from torchmetrics.aggregation import MaxMetric
+from torchmetrics.wrappers import WrapperMetric
 
-import utils
-import vision_transformer as vits
+from src.utils import pylogger
+from src.utils.timm_utils import timm_embed_dim
 
-
-def eval_linear(args):
-    utils.init_distributed_mode(args)
-    print("git:\n  {}\n".format(utils.get_sha()))
-    print("\n".join("%s: %s" % (k, str(v)) for k, v in sorted(dict(vars(args)).items())))
-    cudnn.benchmark = True
-
-    # ============ building network ... ============
-    # if the network is a Vision Transformer (i.e. vit_tiny, vit_small, vit_base)
-    if args.arch in vits.__dict__.keys():
-        model = vits.__dict__[args.arch](patch_size=args.patch_size, num_classes=0)
-        embed_dim = model.embed_dim * (args.n_last_blocks + int(args.avgpool_patchtokens))
-    # if the network is a XCiT
-    elif "xcit" in args.arch:
-        model = torch.hub.load('facebookresearch/xcit:main', args.arch, num_classes=0)
-        embed_dim = model.embed_dim
-    # otherwise, we check if the architecture is in torchvision models
-    elif args.arch in torchvision_models.__dict__.keys():
-        model = torchvision_models.__dict__[args.arch]()
-        embed_dim = model.fc.weight.shape[1]
-        model.fc = nn.Identity()
-    else:
-        print(f"Unknow architecture: {args.arch}")
-        sys.exit(1)
-    model.cuda()
-    model.eval()
-    # load weights to evaluate
-    utils.load_pretrained_weights(model, args.pretrained_weights, args.checkpoint_key, args.arch, args.patch_size)
-    print(f"Model {args.arch} built.")
-
-    linear_classifier = LinearClassifier(embed_dim, num_labels=args.num_labels)
-    linear_classifier = linear_classifier.cuda()
-    linear_classifier = nn.parallel.DistributedDataParallel(linear_classifier, device_ids=[args.gpu])
-
-    # ============ preparing data ... ============
-    val_transform = pth_transforms.Compose([
-        pth_transforms.Resize(256, interpolation=3),
-        pth_transforms.CenterCrop(224),
-        pth_transforms.ToTensor(),
-        pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    ])
-    dataset_val = datasets.ImageFolder(os.path.join(args.data_path, "val"), transform=val_transform)
-    val_loader = torch.utils.data.DataLoader(
-        dataset_val,
-        batch_size=args.batch_size_per_gpu,
-        num_workers=args.num_workers,
-        pin_memory=True,
-    )
-
-    if args.evaluate:
-        utils.load_pretrained_linear_weights(linear_classifier, args.arch, args.patch_size)
-        test_stats = validate_network(val_loader, model, linear_classifier, args.n_last_blocks, args.avgpool_patchtokens)
-        print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
-        return
-
-    train_transform = pth_transforms.Compose([
-        pth_transforms.RandomResizedCrop(224),
-        pth_transforms.RandomHorizontalFlip(),
-        pth_transforms.ToTensor(),
-        pth_transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-    ])
-    dataset_train = datasets.ImageFolder(os.path.join(args.data_path, "train"), transform=train_transform)
-    sampler = torch.utils.data.distributed.DistributedSampler(dataset_train)
-    train_loader = torch.utils.data.DataLoader(
-        dataset_train,
-        sampler=sampler,
-        batch_size=args.batch_size_per_gpu,
-        num_workers=args.num_workers,
-        pin_memory=True,
-    )
-    print(f"Data loaded with {len(dataset_train)} train and {len(dataset_val)} val imgs.")
-
-    # set optimizer
-    optimizer = torch.optim.SGD(
-        linear_classifier.parameters(),
-        args.lr * (args.batch_size_per_gpu * utils.get_world_size()) / 256., # linear scaling rule
-        momentum=0.9,
-        weight_decay=0, # we do not apply weight decay
-    )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, eta_min=0)
-
-    # Optionally resume from a checkpoint
-    to_restore = {"epoch": 0, "best_acc": 0.}
-    utils.restart_from_checkpoint(
-        os.path.join(args.output_dir, "checkpoint.pth.tar"),
-        run_variables=to_restore,
-        state_dict=linear_classifier,
-        optimizer=optimizer,
-        scheduler=scheduler,
-    )
-    start_epoch = to_restore["epoch"]
-    best_acc = to_restore["best_acc"]
-
-    for epoch in range(start_epoch, args.epochs):
-        train_loader.sampler.set_epoch(epoch)
-
-        train_stats = train(model, linear_classifier, optimizer, train_loader, epoch, args.n_last_blocks, args.avgpool_patchtokens)
-        scheduler.step()
-
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                     'epoch': epoch}
-        if epoch % args.val_freq == 0 or epoch == args.epochs - 1:
-            test_stats = validate_network(val_loader, model, linear_classifier, args.n_last_blocks, args.avgpool_patchtokens)
-            print(f"Accuracy at epoch {epoch} of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
-            best_acc = max(best_acc, test_stats["acc1"])
-            print(f'Max accuracy so far: {best_acc:.2f}%')
-            log_stats = {**{k: v for k, v in log_stats.items()},
-                         **{f'test_{k}': v for k, v in test_stats.items()}}
-        if utils.is_main_process():
-            with (Path(args.output_dir) / "log.txt").open("a") as f:
-                f.write(json.dumps(log_stats) + "\n")
-            save_dict = {
-                "epoch": epoch + 1,
-                "state_dict": linear_classifier.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
-                "best_acc": best_acc,
-            }
-            torch.save(save_dict, os.path.join(args.output_dir, "checkpoint.pth.tar"))
-    print("Training of the supervised linear classifier on frozen features completed.\n"
-                "Top-1 test accuracy: {acc:.1f}".format(acc=best_acc))
-
-
-def train(model, linear_classifier, optimizer, loader, epoch, n, avgpool):
-    linear_classifier.train()
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = 'Epoch: [{}]'.format(epoch)
-    for (inp, target) in metric_logger.log_every(loader, 20, header):
-        # move to gpu
-        inp = inp.cuda(non_blocking=True)
-        target = target.cuda(non_blocking=True)
-
-        # forward
-        with torch.no_grad():
-            if "vit" in args.arch:
-                intermediate_output = model.get_intermediate_layers(inp, n)
-                output = torch.cat([x[:, 0] for x in intermediate_output], dim=-1)
-                if avgpool:
-                    output = torch.cat((output.unsqueeze(-1), torch.mean(intermediate_output[-1][:, 1:], dim=1).unsqueeze(-1)), dim=-1)
-                    output = output.reshape(output.shape[0], -1)
-            else:
-                output = model(inp)
-        output = linear_classifier(output)
-
-        # compute cross entropy loss
-        loss = nn.CrossEntropyLoss()(output, target)
-
-        # compute the gradients
-        optimizer.zero_grad()
-        loss.backward()
-
-        # step
-        optimizer.step()
-
-        # log 
-        torch.cuda.synchronize()
-        metric_logger.update(loss=loss.item())
-        metric_logger.update(lr=optimizer.param_groups[0]["lr"])
-    # gather the stats from all processes
-    metric_logger.synchronize_between_processes()
-    print("Averaged stats:", metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
-
-
-@torch.no_grad()
-def validate_network(val_loader, model, linear_classifier, n, avgpool):
-    linear_classifier.eval()
-    metric_logger = utils.MetricLogger(delimiter="  ")
-    header = 'Test:'
-    for inp, target in metric_logger.log_every(val_loader, 20, header):
-        # move to gpu
-        inp = inp.cuda(non_blocking=True)
-        target = target.cuda(non_blocking=True)
-
-        # forward
-        with torch.no_grad():
-            if "vit" in args.arch:
-                intermediate_output = model.get_intermediate_layers(inp, n)
-                output = torch.cat([x[:, 0] for x in intermediate_output], dim=-1)
-                if avgpool:
-                    output = torch.cat((output.unsqueeze(-1), torch.mean(intermediate_output[-1][:, 1:], dim=1).unsqueeze(-1)), dim=-1)
-                    output = output.reshape(output.shape[0], -1)
-            else:
-                output = model(inp)
-        output = linear_classifier(output)
-        loss = nn.CrossEntropyLoss()(output, target)
-
-        if linear_classifier.module.num_labels >= 5:
-            acc1, acc5 = utils.accuracy(output, target, topk=(1, 5))
-        else:
-            acc1, = utils.accuracy(output, target, topk=(1,))
-
-        batch_size = inp.shape[0]
-        metric_logger.update(loss=loss.item())
-        metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
-        if linear_classifier.module.num_labels >= 5:
-            metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
-    if linear_classifier.module.num_labels >= 5:
-        print('* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
-          .format(top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss))
-    else:
-        print('* Acc@1 {top1.global_avg:.3f} loss {losses.global_avg:.3f}'
-          .format(top1=metric_logger.acc1, losses=metric_logger.loss))
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
 
 class LinearClassifier(nn.Module):
-    """Linear layer to train on top of frozen features"""
-    def __init__(self, dim, num_labels=1000):
-        super(LinearClassifier, self).__init__()
-        self.num_labels = num_labels
+    """Linear layer to train on top of frozen features."""
+
+    def __init__(self, dim: int, num_labels: int) -> None:
+        """Initialize the classifier.
+
+        :param dim: Feature dimension of the backbone.
+        :param num_labels: Number of target classes.
+        """
+        super().__init__()
         self.linear = nn.Linear(dim, num_labels)
-        self.linear.weight.data.normal_(mean=0.0, std=0.01)
-        self.linear.bias.data.zero_()
+        nn.init.normal_(self.linear.weight, mean=0.0, std=0.01)
+        nn.init.zeros_(self.linear.bias)
 
-    def forward(self, x):
-        # flatten
-        x = x.view(x.size(0), -1)
-
-        # linear layer
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.linear(x)
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser('Evaluation with linear classification on ImageNet')
-    parser.add_argument('--n_last_blocks', default=4, type=int, help="""Concatenate [CLS] tokens
-        for the `n` last blocks. We use `n=4` when evaluating ViT-Small and `n=1` with ViT-Base.""")
-    parser.add_argument('--avgpool_patchtokens', default=False, type=utils.bool_flag,
-        help="""Whether ot not to concatenate the global average pooled features to the [CLS] token.
-        We typically set this to False for ViT-Small and to True with ViT-Base.""")
-    parser.add_argument('--arch', default='vit_small', type=str, help='Architecture')
-    parser.add_argument('--patch_size', default=16, type=int, help='Patch resolution of the model.')
-    parser.add_argument('--pretrained_weights', default='', type=str, help="Path to pretrained weights to evaluate.")
-    parser.add_argument("--checkpoint_key", default="teacher", type=str, help='Key to use in the checkpoint (example: "teacher")')
-    parser.add_argument('--epochs', default=100, type=int, help='Number of epochs of training.')
-    parser.add_argument("--lr", default=0.001, type=float, help="""Learning rate at the beginning of
-        training (highest LR used during training). The learning rate is linearly scaled
-        with the batch size, and specified here for a reference batch size of 256.
-        We recommend tweaking the LR depending on the checkpoint evaluated.""")
-    parser.add_argument('--batch_size_per_gpu', default=128, type=int, help='Per-GPU batch-size')
-    parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
-        distributed training; see https://pytorch.org/docs/stable/distributed.html""")
-    parser.add_argument("--local_rank", default=0, type=int, help="Please ignore and do not set this argument.")
-    parser.add_argument('--data_path', default='/path/to/imagenet/', type=str)
-    parser.add_argument('--num_workers', default=10, type=int, help='Number of data loading workers per GPU.')
-    parser.add_argument('--val_freq', default=1, type=int, help="Epoch frequency for validation.")
-    parser.add_argument('--output_dir', default=".", help='Path to save logs and checkpoints')
-    parser.add_argument('--num_labels', default=1000, type=int, help='Number of labels for linear classifier')
-    parser.add_argument('--evaluate', dest='evaluate', action='store_true', help='evaluate model on validation set')
-    args = parser.parse_args()
-    eval_linear(args)
+class TrainMetrics(WrapperMetric):
+    """Aggregate training metrics."""
+
+    def __init__(
+        self,
+        num_classes: int,
+        nan_strategy: str = "disable",
+        sync_on_compute: bool = False,
+    ) -> None:
+        super().__init__()
+        mean_kwargs = {
+            "nan_strategy": nan_strategy,
+            "sync_on_compute": sync_on_compute,
+        }
+        acc_kwargs = {
+            "num_classes": num_classes,
+            "top_k": 1,
+            "sync_on_compute": sync_on_compute,
+        }
+
+        self.metrics = nn.ModuleDict(
+            {
+                "train/loss": MeanMetric(**mean_kwargs),
+                "train/acc": MulticlassAccuracy(**acc_kwargs),
+            }
+        )
+
+    def update(self, preds: torch.Tensor, targets: torch.Tensor, loss: torch.Tensor) -> None:
+        self.metrics["train/loss"].update(loss)
+        self.metrics["train/acc"].update(preds, targets)
+
+    def reset(self) -> None:  # noqa: D401 - keep same signature
+        for m in self.metrics.values():
+            m.reset()
+
+    def compute(self) -> dict[str, float]:
+        return {
+            "train/loss": float(self.metrics["train/loss"].compute()),
+            "train/acc": float(self.metrics["train/acc"].compute()) * 100.0,
+        }
+
+
+class ValMetrics(WrapperMetric):
+    """Aggregate validation metrics."""
+
+    def __init__(
+        self,
+        num_classes: int,
+        nan_strategy: str = "disable",
+        sync_on_compute: bool = False,
+    ) -> None:
+        super().__init__()
+        mean_kwargs = {
+            "nan_strategy": nan_strategy,
+            "sync_on_compute": sync_on_compute,
+        }
+        acc_kwargs = {
+            "num_classes": num_classes,
+            "sync_on_compute": sync_on_compute,
+        }
+
+        self.metrics = nn.ModuleDict(
+            {
+                "val/loss": MeanMetric(**mean_kwargs),
+                "val/top-1-acc": MulticlassAccuracy(top_k=1, **acc_kwargs),
+                "val/top-5-acc": MulticlassAccuracy(top_k=5, **acc_kwargs),
+            }
+        )
+
+    def update(
+        self, preds: torch.Tensor, targets: torch.Tensor, loss: torch.Tensor
+    ) -> None:
+        self.metrics["val/loss"].update(loss)
+        self.metrics["val/top-1-acc"].update(preds, targets)
+        self.metrics["val/top-5-acc"].update(preds, targets)
+
+    def reset(self) -> None:  # noqa: D401 - keep same signature
+        for m in self.metrics.values():
+            m.reset()
+
+    def compute(self) -> dict[str, float]:
+        return {
+            "val/loss": float(self.metrics["val/loss"].compute()),
+            "val/top-1-acc": float(self.metrics["val/top-1-acc"].compute()) * 100.0,
+            "val/top-5-acc": float(self.metrics["val/top-5-acc"].compute()) * 100.0,
+        }
+
+
+class BestValMetrics(WrapperMetric):
+    """Track best validation metrics across epochs."""
+
+    def __init__(
+        self,
+        nan_strategy: str = "disable",
+        sync_on_compute: bool = False,
+    ) -> None:
+        super().__init__()
+        mean_kwargs = {
+            "nan_strategy": nan_strategy,
+            "sync_on_compute": sync_on_compute,
+        }
+
+        self.metrics = nn.ModuleDict(
+            {"val/best-top-1-acc": MaxMetric(**mean_kwargs)}
+        )
+
+    def update(self, val_scores: dict[str, float]) -> None:
+        self.metrics["val/best-top-1-acc"].update(val_scores["val/top-1-acc"])
+
+    def compute(self) -> dict[str, float]:
+        return {
+            "val/best-top-1-acc": float(
+                self.metrics["val/best-top-1-acc"].compute()
+            )
+        }
+
+
+def train_one_epoch(
+    backbone: nn.Module,
+    classifier: nn.Module,
+    loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    inference_fn: callable,
+    metrics: TrainMetrics,
+    fabric: L.Fabric,
+    global_step: int,
+    epoch: int = 0,
+) -> int:
+    """Run one training epoch.
+
+    :param backbone: Frozen feature extractor.
+    :param classifier: Linear classifier to train.
+    :param loader: Dataloader providing training images and labels.
+    :param optimizer: Optimizer for ``classifier`` parameters.
+    :param inference_fn: Function extracting features from ``backbone``.
+    :param metrics: Metric aggregator updated during training.
+    :param fabric: Lightning Fabric handler.
+    :param global_step: Current global step.
+    :param epoch: Current epoch index.
+    :returns: Updated global step after the epoch.
+    """
+    criterion = nn.CrossEntropyLoss()
+    classifier.train()
+    metrics.reset()
+    train_iter = tqdm(
+        loader,
+        desc=f"Train {epoch}",
+        disable=not fabric.is_global_zero,
+    )
+    for imgs, target in train_iter:
+        with torch.no_grad():
+            feats = inference_fn(backbone, imgs)
+        output = classifier(feats)
+        loss = criterion(output, target)
+        fabric.backward(loss)
+        optimizer.step()
+        optimizer.zero_grad()
+        metrics.update(output.detach(), target, loss.detach())
+        if fabric.is_global_zero:
+            fabric.log_dict(metrics.compute(), step=global_step)
+        global_step += 1
+    return global_step
+
+
+def run_validation(
+    backbone: nn.Module,
+    classifier: nn.Module,
+    loader: DataLoader,
+    val_metrics: ValMetrics,
+    best_val_metrics: BestValMetrics,
+    inference_fn: callable,
+    fabric: L.Fabric,
+    epoch: int,
+    global_step: int,
+) -> dict[str, float]:
+    """Run validation and update best metrics.
+
+    :param backbone: Frozen feature extractor.
+    :param classifier: Linear classifier to evaluate.
+    :param loader: Validation dataloader.
+    :param val_metrics: Metric aggregator for current epoch.
+    :param best_val_metrics: Tracker for best metrics across epochs.
+    :param inference_fn: Feature extraction function.
+    :returns: Dictionary with validation and best scores.
+    """
+    criterion = nn.CrossEntropyLoss()
+    classifier.eval()
+    val_metrics.reset()
+    val_iter = tqdm(
+        loader,
+        desc="Val",
+        disable=not fabric.is_global_zero,
+    )
+    with torch.no_grad():
+        for imgs, target in val_iter:
+            feats = inference_fn(backbone, imgs)
+            output = classifier(feats)
+            loss = criterion(output, target)
+            val_metrics.update(output, target, loss)
+    current_scores = val_metrics.compute()
+    best_val_metrics.update(current_scores)
+    best_scores = best_val_metrics.compute()
+    log.info(
+        "Epoch %d: val loss %.4f top1 %.2f top5 %.2f best %.2f",
+        epoch,
+        current_scores["val/loss"],
+        current_scores["val/top-1-acc"],
+        current_scores["val/top-5-acc"],
+        best_scores["val/best-top-1-acc"],
+    )
+    if fabric.is_global_zero:
+        fabric.log_dict({**current_scores, **best_scores}, step=global_step)
+    return {**current_scores, **best_scores}
+
+
+@hydra.main(
+    version_base="1.3",
+    config_path="../../../fabric_configs/experiment/linear_classification",
+    config_name="config",
+)
+def main(cfg: DictConfig) -> None:
+    """Run a linear classification experiment.
+
+    :param cfg: Hydra configuration composed from ``config.yaml``.
+    """
+    log.info(OmegaConf.to_yaml(cfg))
+    run = wandb.init(project="PART-linear-classification")
+    run.config.update({"tags": cfg.get("tags", [])}, allow_val_change=True)
+    logger = WandbLogger(experiment=run)
+
+    train_ds = instantiate(cfg.data.train)
+    val_ds = instantiate(cfg.data.val)
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=cfg.train.batch_size,
+        shuffle=True,
+        num_workers=cfg.data.num_workers,
+        pin_memory=cfg.data.pin_memory,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=cfg.train.batch_size,
+        shuffle=False,
+        num_workers=cfg.data.num_workers,
+        pin_memory=cfg.data.pin_memory,
+    )
+
+    inference_fn = instantiate(cfg.model.inference_fn)
+
+    backbone = instantiate(cfg.model.net, _convert_="all")
+    backbone.eval()
+    for p in backbone.parameters():
+        p.requires_grad = False
+
+    feat_dim = timm_embed_dim(backbone) * (
+        cfg.n_last_blocks + int(cfg.avgpool_patchtokens)
+    )
+    classifier = LinearClassifier(feat_dim, cfg.num_labels)
+
+    optimizer = torch.optim.SGD(classifier.parameters(), lr=cfg.train.lr, momentum=0.9)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, cfg.train.epochs)
+
+    fabric = L.Fabric(
+        accelerator=cfg.train.accelerator,
+        devices=cfg.train.devices,
+        precision=cfg.train.precision,
+        loggers=logger,
+    )
+    classifier, optimizer = fabric.setup(classifier, optimizer)
+    train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
+    backbone = backbone.to(fabric.device)
+
+    train_metrics = TrainMetrics(cfg.num_labels).to(fabric.device)
+    val_metrics = ValMetrics(cfg.num_labels).to(fabric.device)
+    best_val_metrics = BestValMetrics().to(fabric.device)
+    global_step = 0
+    for epoch in range(cfg.train.epochs):
+        global_step = train_one_epoch(
+            backbone=backbone,
+            classifier=classifier,
+            loader=train_loader,
+            optimizer=optimizer,
+            inference_fn=inference_fn,
+            metrics=train_metrics,
+            fabric=fabric,
+            global_step=global_step,
+            epoch=epoch,
+        )
+        scheduler.step()
+        if epoch % cfg.train.val_freq == 0 or epoch == cfg.train.epochs - 1:
+            run_validation(
+                backbone=backbone,
+                classifier=classifier,
+                loader=val_loader,
+                val_metrics=val_metrics,
+                best_val_metrics=best_val_metrics,
+                inference_fn=inference_fn,
+                fabric=fabric,
+                epoch=epoch,
+                global_step=global_step,
+            )
+
+    log.info(
+        "Training finished. Best accuracy: %.2f",
+        best_val_metrics.compute()["val/best-top-1-acc"],
+    )
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    finally:
+        if wandb.run:
+            wandb.finish()

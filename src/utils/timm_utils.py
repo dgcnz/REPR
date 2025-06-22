@@ -83,3 +83,59 @@ def forward_features_convnext(
         feats = model.norm_pre(feats)
     return feats
 
+
+def extract_vit_cls(
+    model: torch.nn.Module,
+    imgs: Float[Tensor, "B C H W"],
+    n_last_blocks: int,
+) -> Float[Tensor, "B d"]:
+    """Return concatenated CLS tokens from the last ``n`` blocks.
+
+    :param model: Vision Transformer backbone.
+    :param imgs: Batch of input images.
+    :param n_last_blocks: Number of blocks to extract features from.
+    :returns: Flattened CLS token features.
+    """
+    with torch.no_grad():
+        outs = model.get_intermediate_layers(imgs, n_last_blocks)
+    cls_tokens = [x[:, 0] for x in outs]
+    return torch.cat(cls_tokens, dim=-1)
+
+
+def extract_meanpool_cls(
+    model: torch.nn.Module,
+    imgs: Float[Tensor, "B C H W"],
+    n_last_blocks: int,
+) -> Float[Tensor, "B d"]:
+    """Return CLS tokens plus mean pooled patch tokens from the last layer.
+
+    :param model: Vision Transformer backbone.
+    :param imgs: Batch of input images.
+    :param n_last_blocks: Number of blocks to extract features from.
+    :returns: Flattened features.
+    """
+    with torch.no_grad():
+        outs = model.get_intermediate_layers(imgs, n_last_blocks)
+    cls_tokens = torch.cat([x[:, 0] for x in outs], dim=-1)
+    prefix = getattr(model, "num_prefix_tokens", 1)
+    mean_tokens = torch.mean(outs[-1][:, prefix:], dim=1)
+    return torch.cat((cls_tokens, mean_tokens), dim=-1)
+
+
+def extract_patch_meanpool(
+    model: torch.nn.Module,
+    imgs: Float[Tensor, "B C H W"],
+    n_last_blocks: int,
+) -> Float[Tensor, "B d"]:
+    """Return mean pooled patch tokens from the last block.
+
+    :param model: Vision Transformer backbone.
+    :param imgs: Batch of input images.
+    :param n_last_blocks: Ignored but kept for API compatibility.
+    :returns: Flattened mean pooled patch tokens.
+    """
+    with torch.no_grad():
+        outs = model.get_intermediate_layers(imgs, n_last_blocks)
+    prefix = getattr(model, "num_prefix_tokens", 1)
+    return torch.mean(outs[-1][:, prefix:], dim=1)
+
