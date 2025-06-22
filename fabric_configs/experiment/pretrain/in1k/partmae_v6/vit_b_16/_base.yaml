@@ -61,17 +61,17 @@ model:
   ls_init_values: null
   num_register_tokens: 0
 
-  lambda_pose: 0.6
+  lambda_pose: 0.111
 
   lambda_pstress: 0 
   lambda_psmooth: 0
   lambda_pmatch: 0
   lambda_pcr: 0
 
-  lambda_ccr: 0.05
-  lambda_cinv: 0.25
+  lambda_ccr: 0.333
+  lambda_cinv: 0.556
 
-  cr_eps: 0.05
+  cr_eps: 0.1
   sigma_yx: 0.2
   sigma_hw: 1.0
   beta_f: 0.1
@@ -89,7 +89,7 @@ scheduler:
   lr_min: 1e-7
 
 
-blr: 1e-4 
+blr: 5e-5
 optimizer:
   lr: ${eval:${blr} * ${total_batch_size} / 256}
   weight_decay: 0.05
