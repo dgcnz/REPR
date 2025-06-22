@@ -1,5 +1,5 @@
 # from torchmetrics.wrappers import ClasswiseWrapper # inspired by ClasswiseWrapper
-from torchmetrics import MeanMetric, Metric, MaxMetric, MeanSquaredError
+from torchmetrics import MeanMetric, Metric, MaxMetric, MeanSquaredError, MinMetric
 from torchmetrics.wrappers.abstract import WrapperMetric
 from torch import nn, Tensor
 import torch
@@ -45,6 +45,19 @@ class V6Metrics(WrapperMetric):
                 "pred_ds_std": MeanMetric(**mean_kwargs),
                 "gt_dt_std": MeanMetric(**mean_kwargs),
                 "gt_ds_std": MeanMetric(**mean_kwargs),
+
+                "gt_ds_min": MinMetric(**mean_kwargs),
+                "gt_ds_max": MaxMetric(**mean_kwargs),
+
+                "gt_dt_min": MinMetric(**mean_kwargs),
+                "gt_dt_max": MaxMetric(**mean_kwargs),
+
+                "pred_ds_min": MinMetric(**mean_kwargs),
+                "pred_ds_max": MaxMetric(**mean_kwargs),
+
+                "pred_dt_max": MaxMetric(**mean_kwargs),
+                "pred_dt_min": MinMetric(**mean_kwargs),
+
                 "rmse_pred_dt": MeanSquaredError(squared=False, **mse_kwargs),
                 "rmse_pred_ds": MeanSquaredError(squared=False, **mse_kwargs),
                 "calib_dt_ratio": MeanMetric(**mean_kwargs),
@@ -85,9 +98,21 @@ class V6Metrics(WrapperMetric):
 
         if "pred_dT" in outputs and "gt_dT" in outputs:
             self.metrics["pred_dt_std"].update(outputs["pred_dT"][..., :2].std())
+            self.metrics["pred_dt_min"].update(outputs["pred_dT"][..., :2].min())
+            self.metrics["pred_dt_max"].update(outputs["pred_dT"][..., :2].max())
+
             self.metrics["pred_ds_std"].update(outputs["pred_dT"][..., 2:].std())
+            self.metrics["pred_ds_min"].update(outputs["pred_dT"][..., 2:].min())
+            self.metrics["pred_ds_max"].update(outputs["pred_dT"][..., 2:].max())
+            
             self.metrics["gt_dt_std"].update(outputs["gt_dT"][..., :2].std())
+            self.metrics["gt_dt_min"].update(outputs["gt_dT"][..., :2].min())
+            self.metrics["gt_dt_max"].update(outputs["gt_dT"][..., :2].max())
+
             self.metrics["gt_ds_std"].update(outputs["gt_dT"][..., 2:].std())
+            self.metrics["gt_ds_min"].update(outputs["gt_dT"][..., 2:].min())
+            self.metrics["gt_ds_max"].update(outputs["gt_dT"][..., 2:].max())
+
             self.metrics["rmse_pred_dt"].update(
                 outputs["pred_dT"][..., :2].flatten(), outputs["gt_dT"][..., :2].flatten()
             )
