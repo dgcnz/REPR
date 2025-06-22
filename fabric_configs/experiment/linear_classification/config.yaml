@@ -1,0 +1,23 @@
+defaults:
+  - _self_
+  - model: dino_b
+  - data: imagenette
+
+train:
+  batch_size: 128
+  lr: 0.01
+  epochs: 25
+  val_freq: 1
+  accelerator: gpu
+  devices: 1
+  precision: null
+
+n_last_blocks: 4
+avgpool_patchtokens: true
+num_labels: 10
+
+paths:
+  root_dir: ${oc.env:PROJECT_ROOT}
+  log_dir: ${paths.root_dir}/logs/
+  output_dir: ${hydra:runtime.output_dir}
+  work_dir: ${hydra:runtime.cwd}
