@@ -115,7 +115,7 @@ class PoseHead(nn.Module):
         out = dict()
 
         h = torch.cat([self.mu_t_proj(z), self.mu_s_proj(z)], dim=-1)  # [B, M, 4]
-        out["pred_dT"] = self.tanh(h.unsqueeze(2) - h.unsqueeze(1)).clamp(-1.0, 1.0)
+        out["pred_dT"] = self.tanh(h.unsqueeze(2) - h.unsqueeze(1))
         # [B, M, M, K]
 
         if self.uncertainty_mode == "none":
