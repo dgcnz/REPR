@@ -16,8 +16,12 @@ def preprocess(state_dict):
         # This block was empty in the provided snippet, assuming it's for future use or was elided
         pass
 
-    state_dict.pop("cls_token", None)
-    state_dict.pop("pos_embed", None) # Assuming positional embeddings are not used and should be removed
+    assert "cls_token" in state_dict
+    # state_dict.pop("cls_token", None)
+    # state_dict.pop("pos_embed", None) # Assuming positional embeddings are not used and should be removed
+    state_dict["pos_embed"] = torch.zeros_like(state_dict["pos_embed"])
+    print(state_dict["pos_embed"].shape)
+    # exit(0)
     state_dict.pop("targets", None)
     state_dict.pop("clf.weight", None)
     state_dict.pop("clf.bias", None)
@@ -152,14 +156,14 @@ if __name__ == "__main__":
     # assert src.pretrain, "Pretrained model expected"
 
     ckpt = preprocess(ckpt)
-
+    assert "cls_token" in ckpt
+    from timm.models.vision_transformer import VisionTransformer as TimmVisionTransformer
     # load it to deit_base_patch16_224
     tgt = timm.create_model(
         "vit_base_patch16_224",
         pretrained=True,
         num_classes=0,
-        pos_embed="none",
-        class_token=False,
+        class_token=True,
         global_pool="avg",
         fc_norm=False,
         pretrained_strict=True,
@@ -204,6 +208,12 @@ if __name__ == "__main__":
 
     tgt_out["z"] = tgt.forward_features(x)
     src_out["z"] = src.forward_features_pretrain(x)
+    # check sizes match
+    print(f"tgt_out['z'].shape: {tgt_out['z'].shape}, src_out['z'].shape: {src_out['z'].shape}")
+    assert tgt_out["z"].shape == src_out["z"].shape, (
+        f"Output shapes do not match! tgt: {tgt_out['z'].shape}, src: {src_out['z'].shape}"
+    )
     assert torch.allclose(tgt_out["z"], src_out["z"], atol=1e-5), (
         "Feature extraction does not match!"
     )
+    print("All checks passed successfully!")

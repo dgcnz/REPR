@@ -5,16 +5,13 @@ defaults:
 
 train:
   batch_size: 128
-  lr: 0.01
+  blr: 0.001
   epochs: 25
   val_freq: 1
   accelerator: gpu
   devices: 1
   precision: null
-
-n_last_blocks: 4
-avgpool_patchtokens: true
-num_labels: 10
+  seed: 42
 
 paths:
   root_dir: ${oc.env:PROJECT_ROOT}

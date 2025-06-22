@@ -1,7 +1,6 @@
 train:
-  _target_: torchvision.datasets.Imagenette
-  root: /mnt/sdb1/datasets
-  split: train
+  _target_: torchvision.datasets.ImageFolder
+  root: /mnt/sdb1/datasets/stylized-imagenette/train
   transform: 
     _target_: torchvision.transforms.Compose
     transforms:
@@ -13,9 +12,8 @@ train:
         mean: [0.485, 0.456, 0.406]
         std: [0.229, 0.224, 0.225]
 val:
-  _target_: torchvision.datasets.Imagenette
-  root: /mnt/sdb1/datasets
-  split: val
+  _target_: torchvision.datasets.ImageFolder
+  root: /mnt/sdb1/datasets/stylized-imagenette/val
   transform: 
     _target_: torchvision.transforms.Compose
     transforms:

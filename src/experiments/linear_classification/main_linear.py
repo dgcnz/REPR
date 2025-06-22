@@ -1,4 +1,3 @@
-
 import hydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
@@ -12,13 +11,17 @@ import wandb
 from torchmetrics import MeanMetric
 from torchmetrics.classification import MulticlassAccuracy
 from torchmetrics.aggregation import MaxMetric
-from torchmetrics.wrappers import WrapperMetric
+from torchmetrics.wrappers.abstract import WrapperMetric
 
 from src.utils import pylogger
-from src.utils.timm_utils import timm_embed_dim
+import torch.backends.cudnn as cudnn
+
+cudnn.benchmark = True
+torch.set_float32_matmul_precision('high')
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
+OmegaConf.register_new_resolver("eval", eval)
 
 class LinearClassifier(nn.Module):
     """Linear layer to train on top of frozen features."""
@@ -241,12 +244,13 @@ def run_validation(
     best_val_metrics.update(current_scores)
     best_scores = best_val_metrics.compute()
     log.info(
-        "Epoch %d: val loss %.4f top1 %.2f top5 %.2f best %.2f",
-        epoch,
-        current_scores["val/loss"],
-        current_scores["val/top-1-acc"],
-        current_scores["val/top-5-acc"],
-        best_scores["val/best-top-1-acc"],
+        "Epoch {}: val loss {:.4f} top1 {:.2f} top5 {:.2f} best {:.2f}".format(
+            epoch,
+            current_scores['val/loss'],
+            current_scores['val/top-1-acc'],
+            current_scores['val/top-5-acc'],
+            best_scores['val/best-top-1-acc']
+        )
     )
     if fabric.is_global_zero:
         fabric.log_dict({**current_scores, **best_scores}, step=global_step)
@@ -292,12 +296,13 @@ def main(cfg: DictConfig) -> None:
     for p in backbone.parameters():
         p.requires_grad = False
 
-    feat_dim = timm_embed_dim(backbone) * (
-        cfg.n_last_blocks + int(cfg.avgpool_patchtokens)
-    )
-    classifier = LinearClassifier(feat_dim, cfg.num_labels)
+    classifier = LinearClassifier(cfg.model.feat_dim, cfg.data.num_labels)
 
-    optimizer = torch.optim.SGD(classifier.parameters(), lr=cfg.train.lr, momentum=0.9)
+    total_batch_size = cfg.train.batch_size * cfg.train.devices
+    log.info("Total batch size: {}".format(total_batch_size))
+    lr = cfg.train.blr * total_batch_size / 256
+    log.info("Using learning rate: {:.6f}".format(lr))
+    optimizer = torch.optim.SGD(classifier.parameters(), lr=lr, momentum=0.9)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, cfg.train.epochs)
 
     fabric = L.Fabric(
@@ -306,12 +311,13 @@ def main(cfg: DictConfig) -> None:
         precision=cfg.train.precision,
         loggers=logger,
     )
+    fabric.seed_everything(cfg.train.seed)
     classifier, optimizer = fabric.setup(classifier, optimizer)
     train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
     backbone = backbone.to(fabric.device)
 
-    train_metrics = TrainMetrics(cfg.num_labels).to(fabric.device)
-    val_metrics = ValMetrics(cfg.num_labels).to(fabric.device)
+    train_metrics = TrainMetrics(cfg.data.num_labels).to(fabric.device)
+    val_metrics = ValMetrics(cfg.data.num_labels).to(fabric.device)
     best_val_metrics = BestValMetrics().to(fabric.device)
     global_step = 0
     for epoch in range(cfg.train.epochs):
@@ -341,8 +347,9 @@ def main(cfg: DictConfig) -> None:
             )
 
     log.info(
-        "Training finished. Best accuracy: %.2f",
-        best_val_metrics.compute()["val/best-top-1-acc"],
+        "Training finished. Best accuracy: {:.2f}".format(
+            best_val_metrics.compute()['val/best-top-1-acc']
+        )
     )
 
 

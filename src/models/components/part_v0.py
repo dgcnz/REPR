@@ -697,7 +697,12 @@ class VisionTransformer(nn.Module):
         return x
     
     def forward_features_pretrain(self, x):
+        B = x.shape[0]
         x = self.patch_embed(x)
+        cls_tokens = self.cls_token.expand(
+            B, -1, -1
+        )  
+        x = torch.cat((cls_tokens, x), dim=1)  # x.shape: torch.Size([256, 65, 384])
         for blk in self.blocks:
             x = blk(x, None)
         x = self.norm(x)

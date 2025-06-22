@@ -3,10 +3,19 @@ net:
   _target_: timm.create_model
   model_name: vit_base_patch16_224.dino
   pretrained: True
-  img_size: 448
 
 inference_fn:
   _target_: src.utils.timm_utils.extract_meanpool_cls
-  n_last_blocks: ${n_last_blocks}
+  n_last_blocks: 1
   _partial_: true
+  #  parser.add_argument('--n_last_blocks', default=4, type=int, help="""Concatenate [CLS] tokens
+  #      for the `n` last blocks. We use `n=4` when evaluating ViT-Small and `n=1` with ViT-Base.""")
+  #  parser.add_argument('--avgpool_patchtokens', default=False, type=utils.bool_flag,
+  #      help="""Whether ot not to concatenate the global average pooled features to the [CLS] token.
+  #      We typically set this to False for ViT-Small and to True with ViT-Base.""")
 
+
+feat_dim: ${eval:768 * 2} # one for [CLS] token and one for avgpool
+#     feat_dim = timm_embed_dim(backbone) * (
+#         cfg.n_last_blocks + int(cfg.avgpool_patchtokens)
+#     )

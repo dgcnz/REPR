@@ -1,0 +1,25 @@
+# @package model
+ckpt_mode: backbone
+
+net:
+  _target_: timm.create_model
+  model_name: vit_base_patch16_224
+  pretrained: True
+  pretrained_strict: True
+  num_classes: 0
+  pretrained_cfg_overlay:
+    state_dict:
+      _target_: src.models.components.converters.timm.cim.preprocess
+      state_dict:
+        _target_: torch.load
+        f: artifacts/cim-v0-rotation45-300.pth
+        weights_only: False
+
+
+inference_fn:
+  _target_: src.utils.timm_utils.extract_meanpool_cls
+  n_last_blocks: 1
+  _partial_: true
+
+
+feat_dim: ${eval:768 * 2}

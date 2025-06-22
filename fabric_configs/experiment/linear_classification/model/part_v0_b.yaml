@@ -1,0 +1,37 @@
+ckpt_mode: backbone
+# pretrained=True,
+# num_classes=0,
+# class_token=True,
+# global_pool="avg",
+# fc_norm=False,
+# pretrained_strict=True,
+# pretrained_cfg_overlay=dict(
+#   state_dict=ckpt
+# )
+
+net:
+  _target_: timm.create_model
+  model_name: vit_base_patch16_224
+  pretrained: true
+  num_classes: 0
+  class_token: true
+  global_pool: avg
+  fc_norm: false
+  pretrained_strict: true
+  pretrained_cfg_overlay:
+    state_dict:
+      _target_: src.models.components.converters.timm.part_v0.preprocess
+      state_dict:
+        _target_: torch.load
+        # f: artifacts/tasks_2/9u72ktsg6k/artifacts/checkpoint_epoch_200.pth
+        f: artifacts/tasks_2/ei5wnt8xsp/artifacts/checkpoint_epoch_200.pth
+        weights_only: false
+
+
+inference_fn:
+  _target_: src.utils.timm_utils.extract_meanpool_cls
+  n_last_blocks: 1
+  _partial_: true
+
+
+feat_dim: ${eval:768 * 2} # no cls
