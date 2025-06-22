@@ -429,7 +429,14 @@ class PARTMaskedAutoEncoderViT(nn.Module):
             state_dict["patch_embed.proj.weight"] = state_dict[
                 "patch_embed.proj.weight"
             ].flatten(1, 3)
+        # Handle migration from old 'mu_proj' to new heads
+        if 'pose_head.mu_proj.weight' in state_dict:
+            print("INFO: Migrating weights from old 'mu_proj' to new heads.")
+            mu_proj_weight = state_dict.pop('pose_head.mu_proj.weight')
+            state_dict['pose_head.mu_s_proj.weight'] = mu_proj_weight[:2, :]
+            state_dict['pose_head.mu_t_proj.weight'] = mu_proj_weight[2:, :]
         return super().load_state_dict(state_dict, strict, assign)
+        
 
     def _cache_shapes(self):
         (gN, gM), gV = self._get_N(self.img_size), 2

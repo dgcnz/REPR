@@ -45,7 +45,10 @@ class PoseHead(nn.Module):
         self.tanh = nn.Tanh() if apply_tanh else nn.Identity()
 
         # mean head (no bias since mu_ij = Wz_i - Wz_j)
-        self.mu_proj = nn.Linear(embed_dim, num_targets, bias=False)
+        # self.mu_proj = nn.Linear(embed_dim, num_targets, bias=False)
+        assert num_targets == 4
+        self.mu_t_proj = nn.Linear(embed_dim, 2, bias=False)
+        self.mu_s_proj = nn.Linear(embed_dim, 2, bias=False)
 
         # dispersion head(s)
         self.min_logdisp = min_logdisp
@@ -87,7 +90,8 @@ class PoseHead(nn.Module):
 
     def initialize_weights(self):
         # zero-init mu so starting mean=0
-        nn.init.zeros_(self.mu_proj.weight)
+        nn.init.zeros_(self.mu_s_proj.weight)
+        nn.init.zeros_(self.mu_t_proj.weight)
         init_lv = math.log(0.1**2) * 0.5
         assert self.min_logdisp < init_lv < self.max_logdisp
         if self.uncertainty_mode == "additive":
@@ -110,7 +114,7 @@ class PoseHead(nn.Module):
         """
         out = dict()
 
-        h = self.mu_proj(z)  # [B, M, K]
+        h = torch.cat([self.mu_t_proj(z), self.mu_s_proj(z)], dim=-1)  # [B, M, 4]
         out["pred_dT"] = self.tanh(h.unsqueeze(2) - h.unsqueeze(1)).clamp(-1.0, 1.0)
         # [B, M, M, K]
 
