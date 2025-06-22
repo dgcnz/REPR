@@ -7,9 +7,17 @@ net:
   pretrained_strict: True
   num_classes: 0
   img_size: 448
+  norm_layer:
+    _target_: torch.nn.LayerNorm
+    _partial_: true
+    eps: 1e-6
   pretrained_cfg_overlay:
     state_dict:
       _target_: src.models.components.converters.timm.droppos.preprocess
       state_dict:
         _target_: torch.load
         f: artifacts/DropPos_pretrain_vit_base_patch16.pth
+
+inference_fn:
+  _target_: src.utils.timm_utils.forward_features_vit
+  _partial_: true

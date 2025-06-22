@@ -1,5 +1,5 @@
 ckpt_mode: checkpoint
-ckpt_path: ???
+ckpt_path: outputs/2025-04-11/10-15-18/epoch_0199.ckpt
 
 net:
   _target_: timm.create_model
@@ -18,3 +18,7 @@ net:
         _target_: torch.load
         f: ${model.ckpt_path}
 
+
+inference_fn:
+  _target_: src.utils.timm_utils.forward_features_vit
+  _partial_: true
