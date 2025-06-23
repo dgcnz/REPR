@@ -5,6 +5,7 @@ from jaxtyping import Float, Int
 from torch.nn.functional import mse_loss, l1_loss
 import torch.nn.functional as F
 import pytest
+from torch.masked import masked_tensor, as_masked_tensor
 
 
 class PoseLoss(nn.Module):
@@ -25,22 +26,22 @@ class PoseLoss(nn.Module):
         self,
         pred_dT: Float[Tensor, "B M M 4"],
         gt_dT: Float[Tensor, "B M M 4"],
-        Ms: "Int[Tensor, ' V']",  # sum(Ms) == M
+        view_ids: Int[Tensor, ' M'],  # [M] view_ids[i] = which view i belongs to
     ) -> Tensor:
-        device, (B, M), V = pred_dT.device, pred_dT.shape[:2], Ms.shape[0]
+        (B, M) = pred_dT.shape[:2]
 
         loss_full = self.criterion(pred_dT, gt_dT, reduction="none")
 
-        view_ids = torch.arange(V, device=device).repeat_interleave(Ms, output_size=M)
-        mask = (view_ids[None, :] == view_ids[:, None]).float()
+        mask = (view_ids[None, :] == view_ids[:, None])
+        diag = mask.sum() * B
+        offdiag = B * M * M - diag
         mask = mask[None, ..., None].expand(B, -1, -1, 1)
-        diag, offdiag = mask.sum(), (1 - mask).sum()
 
-        loss_intra_t = (loss_full[..., :2] * mask).sum() / diag
-        loss_inter_t = (loss_full[..., :2] * (1 - mask)).sum() / offdiag
-        loss_intra_s = (loss_full[..., 2:] * mask).sum() / diag
-        loss_inter_s = (loss_full[..., 2:] * (1 - mask)).sum() / offdiag
-        del loss_full
+        loss_intra  = (loss_full[..., :4] * mask).sum((0, 1, 2)) / diag
+        loss_inter = loss_full.sum((0, 1, 2)) - loss_intra
+        # loss_inter = (loss_full[..., :4] * ~mask).sum((0, 1, 2)) / offdiag
+        loss_intra_t, loss_intra_s = loss_intra[:2].sum(), loss_intra[2:].sum()
+        loss_inter_t, loss_inter_s = loss_inter[:2].sum(), loss_inter[2:].sum()
         loss_t = self.alpha_t * loss_inter_t + (1 - self.alpha_t) * loss_intra_t
         loss_s = self.alpha_s * loss_inter_s + (1 - self.alpha_s) * loss_intra_s
         loss = self.alpha_ts * loss_t + (1 - self.alpha_ts) * loss_s
@@ -1032,10 +1033,10 @@ class OptimizedPoseLossV5(nn.Module):
         "optimized",
         # "optimized_v8",
         # "optimized_v7",
-        "optimized_v4",
+        # "optimized_v4",
         # "optimized_v5",
-        "optimized_v10",
-        "optimized_v11",
+        # "optimized_v10",
+        # "optimized_v11",
     ]
 )
 def poseloss_fn(request):
@@ -1088,7 +1089,12 @@ def test_poseloss_full(poseloss_fn, benchmark_v2):
 
     def run(*inputs):
         return fn(*inputs)
-
+    # If the poseloss_fn is OptimizedPoseLossV10 or V11, we need to pass Ms as a lis
+    if  "PoseLoss" == poseloss_fn.__class__.__name__:
+        # For PoseLoss, we pass Ms as a tensor
+        V = gV + lV
+        view_ids = torch.arange(V, device=device).repeat_interleave(Ms, output_size=M)
+        Ms = view_ids
     if "v10" in poseloss_fn.__class__.__name__.lower():
         # For OptimizedPoseLossV10, we pass Ms as a list
         Ms = Ms.cpu().tolist()

@@ -66,6 +66,9 @@ def validate_checkpoint(ckpt_path: Path) -> tuple[int, str, dict]:
 
 @hydra.main(version_base="1.3", config_path="../../../fabric_configs/experiment/linear_segmentation", config_name="config")
 def main(cfg: DictConfig) -> None:
+    if cfg.get("fp32", None) == 'high':
+        torch.set_float32_matmul_precision("high")
+
     if cfg.restart and cfg.ckpt_path:
         step, run_id, resume_cfg = validate_checkpoint(Path(cfg.ckpt_path))
         run = wandb.init(
@@ -227,6 +230,7 @@ def main(cfg: DictConfig) -> None:
         deterministic=False,
         detect_anomaly=False,
         callbacks=[checkpoint_callback],
+        precision=train_config.get("precision", None),
     )
     trainer.fit(
         model,
