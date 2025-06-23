@@ -8,7 +8,7 @@ train:
   num_workers: 0
   lr: 0.01
   weight_decay: 1e-4
-  step_size: 10
+  step_size: 20
   gamma: 0.1 # this is decay_rate for steplr
   epochs: 25
   accelerator: gpu
@@ -18,9 +18,8 @@ train:
   mask_size: 100
   img_mean: [0.485, 0.456, 0.406]
   img_std: [0.229, 0.224, 0.225]
+  seed: 0
 
 paths:
-  root_dir: ${oc.env:PROJECT_ROOT}
-  log_dir: ${paths.root_dir}/logs/
   output_dir: ${hydra:runtime.output_dir}
   work_dir: ${hydra:runtime.cwd}

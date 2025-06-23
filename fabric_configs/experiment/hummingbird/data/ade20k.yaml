@@ -1,0 +1,4 @@
+dataset_name: "ade20k"
+data_dir: "/mnt/sdb1/datasets/ade20k/ADEChallengeData2016"
+train_fs: null
+val_fs: null

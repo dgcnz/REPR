@@ -5,8 +5,7 @@ net:
   model_name: vit_base_patch16_224
   pretrained: true
   num_classes: 0
-  pos_embed: none
-  class_token: false
+  class_token: true
   global_pool: avg
   fc_norm: false
   pretrained_strict: true

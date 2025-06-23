@@ -311,6 +311,10 @@ def main(cfg: DictConfig) -> None:
         precision=cfg.train.precision,
         loggers=logger,
     )
+    for logger in fabric._loggers:
+        logger.log_hyperparams(
+            OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+        )
     fabric.seed_everything(cfg.train.seed)
     classifier, optimizer = fabric.setup(classifier, optimizer)
     train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)

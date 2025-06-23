@@ -25,9 +25,65 @@ import torchvision.transforms.functional as TF
 from src.utils.timm_utils import timm_embed_dim, timm_patch_size
 from src.utils import pylogger
 
-torch.set_float32_matmul_precision("medium")
 
 log = pylogger.RankedLogger(__name__)
+
+class ScaleInvariantLogRMSE(Metric):
+    """
+    SILog as printed on the KITTI depth-prediction page:
+
+        d_i  = log(pred_i) - log(gt_i)
+        SILog_raw = 1/n * Σ d_i²  -  (1/n * Σ d_i)²
+
+    This implementation:
+    - Masks out any GT <= eps (invalid depth)
+    - Clamps preds to >= eps to avoid log(≤0)
+    - Guards against dividing by zero valid pixels
+    """
+
+    full_state_update = False
+
+    def __init__(self, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.add_state("sum_d2", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("sum_d",  default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("total",  default=torch.tensor(0),   dist_reduce_fx="sum")
+
+    def update(self, preds: torch.Tensor, target: torch.Tensor):
+        # Flatten predictions and targets
+        p = preds.flatten()
+        t = target.flatten()
+
+        # Mask out invalid ground-truth (zeros or near-zero)
+        valid = t > self.eps
+        assert valid.numel() > 0, "No pixels to evaluate in SILog (all GT ≤ eps)"
+        p = torch.clamp(p[valid], min=self.eps)
+        t = t[valid]
+
+        # Double-check no non-positive values remain
+        assert (p > 0).all(), "Predictions contain non-positive values after clamping"
+        assert (t > 0).all(), "Targets contain non-positive values after masking"
+
+        # Compute log differences
+        d = torch.log(p) - torch.log(t)
+
+        # Accumulate sums
+        self.sum_d2 += (d * d).sum()
+        self.sum_d  += d.sum()
+        self.total  += d.numel()
+
+    def compute(self) -> torch.Tensor:
+        # If no valid pixels, return zero
+        if self.total == 0:
+            return torch.tensor(0.0, device=self.sum_d.device)
+
+        n = self.total.float()
+        mean_sq = self.sum_d2 / n
+        mean    = self.sum_d  / n
+        return mean_sq - mean * mean
+
+
 
 
 class TrainMetrics(WrapperMetric):
@@ -67,21 +123,25 @@ class ValMetrics(WrapperMetric):
             {
                 "val/rmse": MeanSquaredError(squared=False, **mse_kwargs),
                 "val/are": AbsoluteRelativeError(),
+                "val/silog": ScaleInvariantLogRMSE(),   # raw version
             }
         )
 
     def update(self, preds, targets):
         self.metrics["val/rmse"].update(preds, targets)
         self.metrics["val/are"].update(preds, targets)
+        self.metrics["val/silog"].update(preds, targets)
 
     def reset(self):
         self.metrics["val/rmse"].reset()
         self.metrics["val/are"].reset()
+        self.metrics["val/silog"].reset()
 
     def compute(self):
         return {
             "val/rmse": float(self.metrics["val/rmse"].compute()),
             "val/are": float(self.metrics["val/are"].compute()),
+            "val/silog": float(self.metrics["val/silog"].compute()),
         }
 
 
@@ -99,6 +159,7 @@ class BestValMetrics(WrapperMetric):
             {
                 "val/rmse_best": MinMetric(**mean_kwargs),
                 "val/are_best": MinMetric(**mean_kwargs),
+                "val/silog_best": MinMetric(**mean_kwargs),
             }
         )
 
@@ -106,11 +167,13 @@ class BestValMetrics(WrapperMetric):
         """Update best metrics from validation scores dictionary."""
         self.metrics["val/rmse_best"].update(val_scores_dict["val/rmse"])
         self.metrics["val/are_best"].update(val_scores_dict["val/are"])
+        self.metrics["val/silog_best"].update(val_scores_dict["val/silog"])
 
     def compute(self):
         return {
             "val/rmse_best": float(self.metrics["val/rmse_best"].compute()),
             "val/are_best": float(self.metrics["val/are_best"].compute()),
+            "val/silog_best": float(self.metrics["val/silog_best"].compute()),
         }
 
 
@@ -206,6 +269,9 @@ class NYULabeledDataset(Dataset):
         depth = (
             self.depth_transform(depth) if self.depth_transform else T.ToTensor()(depth)
         )
+
+        assert depth.min() >= 0, "Depth has negative values—check your loader!"
+        assert (depth > 0).any(), "Depth map is all zeros—did you point at the right file?"
         return img, depth
 
 
@@ -325,6 +391,7 @@ def run_validation(
 )
 def main(cfg: DictConfig):
     log.info(OmegaConf.to_yaml(cfg))
+    torch.set_float32_matmul_precision(cfg.train.get("fp32", "highest"))
 
     run = wandb.init(project="PART-depth")
     run.config.update({"tags": cfg.get("tags", [])}, allow_val_change=True)
@@ -422,6 +489,11 @@ def main(cfg: DictConfig):
         precision=cfg.train.precision,
         loggers=logger,
     )
+    for logger in fabric._loggers:
+        logger.log_hyperparams(
+            OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
+        )
+    fabric.seed_everything(cfg.train.seed, workers=True)
     model, optimizer = fabric.setup(model, optimizer)
     train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
 

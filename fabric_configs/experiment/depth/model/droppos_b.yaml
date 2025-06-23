@@ -7,6 +7,10 @@ net:
   pretrained_strict: True
   num_classes: 0
   img_size: 448
+  norm_layer: 
+    _target_: torch.nn.LayerNorm
+    _partial_: true
+    eps: 1e-6
   pretrained_cfg_overlay:
     state_dict:
       _target_: src.models.components.converters.timm.droppos.preprocess

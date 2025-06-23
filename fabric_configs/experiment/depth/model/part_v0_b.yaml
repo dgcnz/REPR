@@ -5,10 +5,9 @@ net:
   model_name: vit_base_patch16_224
   pretrained: true
   num_classes: 0
-  img_size: 448
-  pos_embed: none
-  class_token: false
+  class_token: true
   global_pool: avg
+  img_size: 448
   fc_norm: false
   pretrained_strict: true
   pretrained_cfg_overlay:

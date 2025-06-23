@@ -161,7 +161,7 @@ def main(cfg: DictConfig):
         ftr_extr_fn=extract_timm_features,
         dataset_name=cfg.data.dataset_name,
         data_dir=cfg.data.data_dir,
-        memory_size=None,
+        memory_size=cfg.get("memory_size", None),
         train_fs_path=cfg.data.train_fs,
         val_fs_path=cfg.data.val_fs,
     )

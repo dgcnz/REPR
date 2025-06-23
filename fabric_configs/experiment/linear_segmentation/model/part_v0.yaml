@@ -5,9 +5,8 @@ net:
   model_name: vit_base_patch16_224
   pretrained: true
   num_classes: 0
+  class_token: true
   img_size: 448
-  pos_embed: none
-  class_token: false
   global_pool: avg
   fc_norm: false
   pretrained_strict: true
@@ -19,3 +18,8 @@ net:
         # f: artifacts/tasks_2/9u72ktsg6k/artifacts/checkpoint_epoch_200.pth
         f: artifacts/tasks_2/ei5wnt8xsp/artifacts/checkpoint_epoch_200.pth
         weights_only: false
+
+
+inference_fn:
+  _target_: src.utils.timm_utils.forward_features_vit
+  _partial_: true
