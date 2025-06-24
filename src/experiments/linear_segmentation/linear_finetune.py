@@ -64,9 +64,13 @@ def validate_checkpoint(ckpt_path: Path) -> tuple[int, str, dict]:
     return ckpt_step, run_id, resume_cfg
 
 
-@hydra.main(version_base="1.3", config_path="../../../fabric_configs/experiment/linear_segmentation", config_name="config")
+@hydra.main(
+    version_base="1.3",
+    config_path="../../../fabric_configs/experiment/linear_segmentation",
+    config_name="config",
+)
 def main(cfg: DictConfig) -> None:
-    if cfg.get("fp32", None) == 'high':
+    if cfg.get("fp32", None) == "high":
         torch.set_float32_matmul_precision("high")
 
     if cfg.restart and cfg.ckpt_path:
@@ -74,7 +78,6 @@ def main(cfg: DictConfig) -> None:
         run = wandb.init(
             project="PART-linear-segmentation",
             group=run_id,
-            config=resume_cfg,
             name=f"{run_id}-{step:07d}",
         )
     else:
@@ -83,10 +86,12 @@ def main(cfg: DictConfig) -> None:
         step = 0
 
     run_name = run.name
-    run.config.update({"tags": cfg.tags}, allow_val_change=True)
+    run.config.update(
+        OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True),
+        allow_val_change=True,
+    )
     logger = WandbLogger(experiment=run)
-
-    seed_everything(0)
+    seed_everything(cfg.seed)
     input_size = cfg.input_size
 
     data_config = cfg.data

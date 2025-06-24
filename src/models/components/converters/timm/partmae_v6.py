@@ -28,10 +28,11 @@ if __name__ == "__main__":
         sampler="ongrid_canonical",
         mask_ratio=0,
         pos_mask_ratio=0,
-        pos_embed_mode="sincos", # also works for "learn"
+        pos_embed_mode="learn", # also works for "learn"
         img_size=32,
         patch_size=4,
         norm_layer=torch.nn.LayerNorm,
+        decoder_from_proj=True,
     )
     state_dict = preprocess({"model": src.state_dict()})
 

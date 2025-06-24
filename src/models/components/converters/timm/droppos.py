@@ -54,4 +54,8 @@ if __name__ == "__main__":
     assert og_out.shape == timm_out.shape, f"Output shapes do not match: {og_out.shape} vs {timm_out.shape}"
     assert torch.allclose(og_out, timm_out, atol=1e-5, rtol=1e-5)
     print("Outputs match successfully!")
+    # print magnitude/norm of output
+    print(f"Output norm: {og_out.norm().item()}")
+    print(f"timm model norm: {timm_out.norm().item()}")
+
 

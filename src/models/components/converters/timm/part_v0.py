@@ -163,9 +163,9 @@ if __name__ == "__main__":
         "vit_base_patch16_224",
         pretrained=True,
         num_classes=0,
-        class_token=True,
-        global_pool="avg",
-        fc_norm=False,
+        # class_token=True,
+        # global_pool="avg",
+        # fc_norm=False,
         pretrained_strict=True,
         pretrained_cfg_overlay=dict(
             state_dict=ckpt
@@ -216,4 +216,6 @@ if __name__ == "__main__":
     assert torch.allclose(tgt_out["z"], src_out["z"], atol=1e-5), (
         "Feature extraction does not match!"
     )
+    # print magnitude of norm
+    print(f"Norm of tgt_out['z']: {tgt_out['z'].norm().item()}, src_out['z']: {src_out['z'].norm().item()}")
     print("All checks passed successfully!")

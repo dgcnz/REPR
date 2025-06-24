@@ -1,20 +1,20 @@
 # @package model
 ckpt_mode: checkpoint
-ckpt_path: outputs/2025-04-11/10-15-18/epoch_0199.ckpt
+ckpt_path: /home/dgcnz/development/thesis/PART/outputs/2025-06-22/19-16-53/epoch_0149.ckpt
 
 net:
   _target_: timm.create_model
   model_name: vit_base_patch16_224
   pretrained: true
   num_classes: 0
-  pretrained_strict: true
   norm_layer:
     _target_: torch.nn.LayerNorm
     _partial_: true
     eps: 1e-6
+  pretrained_strict: true
   pretrained_cfg_overlay:
     state_dict:
-      _target_: src.models.components.converters.timm.partmae_v5_2.preprocess
+      _target_: src.models.components.converters.timm.partmae_v6.preprocess
       state_dict:
         _target_: torch.load
         f: ${model.ckpt_path}

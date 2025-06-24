@@ -104,3 +104,6 @@ if __name__ == "__main__":
     assert torch.allclose(src_out["z"], tgt_out["z"], atol=1e-5), (
         "Outputs do not match!"
     )
+    # print magnitude/norm of output
+    print(f"src_out['z'].norm(): {src_out['z'].norm()}, tgt_out['z'].norm(): {tgt_out['z'].norm()}")
+
