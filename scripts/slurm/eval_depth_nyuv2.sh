@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --gpus=1
 #SBATCH --ntasks=1
-#SBATCH --time=01:00:00
+#SBATCH --time=01:30:00
 #SBATCH --job-name=train
 #SBATCH --output=scripts/slurm_logs/%A.out
 
@@ -26,8 +26,8 @@ srun python -m src.experiments.depth.main_depth \
 	'data.mat_path=/gpfs/scratch1/shared/dcanez/datasets/nyuv2/nyu_depth_v2_labeled.mat' \
     train.seed=0 \
 	model=partmaev6_b_ep199 \
-	+precision=bf16-mixed  \
-	+fp32=high
+	+train.precision=bf16-mixed  \
+	+train.fp32=high
 
 
 deactivate
