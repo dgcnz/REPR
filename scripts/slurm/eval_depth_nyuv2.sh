@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --gpus=1
 #SBATCH --ntasks=1
-#SBATCH --time=01:30:00
+#SBATCH --time=02:00:00
 #SBATCH --job-name=train
 #SBATCH --output=scripts/slurm_logs/%A.out
 
