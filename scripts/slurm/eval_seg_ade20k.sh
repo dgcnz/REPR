@@ -2,8 +2,8 @@
 
 #SBATCH --partition=gpu_mig
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=1
+#SBATCH --gpus=1
+#SBATCH --ntasks=1
 #SBATCH --time=01:00:00
 #SBATCH --job-name=train
 #SBATCH --output=scripts/slurm_logs/%A.out
