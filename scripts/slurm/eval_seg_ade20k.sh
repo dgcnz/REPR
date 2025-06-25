@@ -23,7 +23,8 @@ export TORCHINDUCTOR_CACHE_DIR="/scratch-local/dcanez/tmp/torchinductor/"
 
 
 srun HYDRA_FULL_ERROR=1 python -m src.experiments.linear_segmentation.linear_finetune \
-	data=voc \
+	data=ade20k \
+	data.data_dir='/gpfs/scratch1/shared/dcanez/datasets/ade20k/ADEChallengeData2016' \
     seed=0 \
 	model=partmaev6_b_ep199 \
 	+precision=bf16-mixed  \
