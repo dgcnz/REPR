@@ -1,0 +1,33 @@
+# @package _global_
+defaults:
+  - pretrain/in1k/partmae_v6/vit_b_16/_base
+  - override /data: in1k_snellius
+
+compile: False
+
+total_batch_size: 2048
+
+trainer:
+  max_epochs: 200
+  accelerator: gpu
+  strategy: ddp
+  num_nodes: 1
+  devices: 4
+
+warmup_epochs: 10
+
+scheduler:
+  warmup_t: ${eval:${warmup_epochs} * ${steps_per_epoch}} # 10 epochs * 625 steps/epoch
+  t_initial: ${eval:${trainer.max_epochs} * ${steps_per_epoch}} # 200 epochs * 625 steps/epoch
+
+train_dataloader:
+  batch_size: 512
+  num_workers: 16
+
+model:
+  lambda_pose: 1.0 # only pose
+  # cls
+  lambda_ccr: 0.0
+  lambda_cinv: 0.0
+  tau: 0 # no attn weighting
+  bypass_loss: true
