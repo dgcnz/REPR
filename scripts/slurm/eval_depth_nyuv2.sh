@@ -20,10 +20,10 @@ export PYTHONFAULTHANDLER=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export HF_HOME="/scratch-shared/dcanez/HF_HOME"
 export TORCHINDUCTOR_CACHE_DIR="/scratch-local/dcanez/tmp/torchinductor/"
+export HYDRA_FULL_ERROR=1 
 
-
-srun HYDRA_FULL_ERROR=1 python -m src.experiments.depth.main_depth \
-	data.mat_path='/gpfs/scratch1/shared/dcanez/datasets/nyuv2/nyu_depth_v2_labeled.mat' \
+srun python -m src.experiments.depth.main_depth \
+	'data.mat_path=/gpfs/scratch1/shared/dcanez/datasets/nyuv2/nyu_depth_v2_labeled.mat' \
     train.seed=0 \
 	model=partmaev6_b_ep199 \
 	+precision=bf16-mixed  \
