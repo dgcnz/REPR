@@ -4,3 +4,7 @@ net:
   model_name: vit_base_patch16_224.mae
   img_size: 448
   pretrained: true
+
+inference_fn:
+  _target_: src.utils.timm_utils.forward_features_vit
+  _partial_: true
