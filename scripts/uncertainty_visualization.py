@@ -49,7 +49,7 @@ ROOT = Path("./")
 torch.set_float32_matmul_precision("high")
 
 # Output directory for saving figures
-OUTPUT_DIR = ROOT / "playground/notebooks/output"
+OUTPUT_DIR = ROOT / "scripts/output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Register resolver if not exists
@@ -456,26 +456,26 @@ def plot_multiple_images_with_uncertainty(
             
             # Original image
             axes[i, 0].imshow(canonical_img)
-            axes[i, 0].set_title("Original" if i == 0 else "")
+            axes[i, 0].set_title("Original" if i == 0 else "", fontsize=16)
             axes[i, 0].axis("off")
             
             # GT reconstruction
             gt_img = gt_reconstruction.permute(1, 2, 0).cpu()
             gt_img = torch.clamp(gt_img, 0, 1)  # Clamp to valid range
             axes[i, 1].imshow(gt_img)
-            axes[i, 1].set_title("GT Reconstruction" if i == 0 else "")
+            axes[i, 1].set_title("Ground Truth Reconstruction" if i == 0 else "", fontsize=16)
             axes[i, 1].axis("off")
             
             # Predicted reconstruction  
             pred_img = pred_reconstruction.permute(1, 2, 0).cpu()
             pred_img = torch.clamp(pred_img, 0, 1)  # Clamp to valid range
             axes[i, 2].imshow(pred_img)
-            axes[i, 2].set_title("Reconstruction" if i == 0 else "")
+            axes[i, 2].set_title("Predicted Reconstruction" if i == 0 else "", fontsize=16)
             axes[i, 2].axis("off")
             
             # Uncertainty distributions
             axes[i, 3].imshow(uncertainty_map.cpu(), cmap='plasma', alpha=0.8)
-            axes[i, 3].set_title("Uncertainty Distributions" if i == 0 else "")
+            axes[i, 3].set_title("Uncertainty Distribution" if i == 0 else "", fontsize=16)
             axes[i, 3].axis("off")
             
             # Add image name as y-label
@@ -512,11 +512,12 @@ def main():
     
     # Define image paths to process - modify this list to add/remove images
     image_paths = [
-        ROOT / "artifacts/samoyed.jpg",
+        # ROOT / "artifacts/samoyed.jpg",
         ROOT / "artifacts/polarbears.jpg", 
         ROOT / "artifacts/dog.jpg",
-        ROOT / "artifacts/zebras.jpg",
-        ROOT / "artifacts/people.jpg",
+        # ROOT / "scripts/inputs/skiing.jpg",
+        ROOT / "scripts/inputs/plane.jpg",
+        # ROOT / "artifacts/people.jpg",
         ROOT / "artifacts/labrador.jpg",
     ]
     

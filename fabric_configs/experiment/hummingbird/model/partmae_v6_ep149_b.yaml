@@ -1,6 +1,6 @@
 # @package model
 ckpt_mode: checkpoint
-ckpt_path: outputs/2025-06-22/19-16-53/epoch_0199.ckpt
+ckpt_path: outputs/2025-06-22/19-16-53/epoch_0149.ckpt
 
 net:
   _target_: timm.create_model

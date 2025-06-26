@@ -69,8 +69,8 @@ def load_model(run_folder: Path, ckpt_name: str) -> torch.nn.Module:
 
 
 # RUN_FOLDER = Path("outputs/2025-06-13/19-56-13")
-RUN_FOLDER = Path("outputs/2025-06-15/22-59-28")
-CKPT_NAME = "last.ckpt"
+RUN_FOLDER = Path("outputs/2025-06-22/19-16-53")
+CKPT_NAME = "epoch_0199.ckpt"
 # Initialize the model and configure sampler
 model = load_model(RUN_FOLDER, CKPT_NAME).to(DEVICE).eval()
 # model.update_conf(sampler="ongrid_canonical", mask_ratio=0.0, pos_mask_ratio=1.0)

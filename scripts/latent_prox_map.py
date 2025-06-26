@@ -8,9 +8,7 @@ from gradio_patch_selection import PatchSelector
 import torchvision.transforms as T
 from omegaconf import OmegaConf
 import hydra
-import timm
 import logging
-from src.models.components.converters.timm.partmae_v6 import preprocess
 from torch.utils._pytree import tree_map_only
 
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 # Configuration
 PATCH_SIZE = 16  # must match model.patch_size
 IMG_SIZE = 224  # must match model.img_size
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = "cpu"
 
 # Preprocessing: convert to tensor, normalize with ImageNet stats
 transform = T.Compose(
@@ -29,37 +27,48 @@ transform = T.Compose(
 )
 
 
-def load_model(run_folder: Path, ckpt_name: str) -> torch.nn.Module:
-    """Load the pretrained PART model for inference."""
-    ckpt_path = run_folder / ckpt_name
-    ckpt = torch.load(ckpt_path, map_location="cuda")
-    model = timm.create_model(
-        "vit_small_patch16_224",
-        pretrained=False,
-        num_classes=0,
-    )
-    # OPTION 1: MASK POS EMBED
-    # cls_pos_embed = state_dict["pos_embed"][:, :1, :]  # [1, 1, D]
-    # pos_embed = state_dict["pos_embed"][:, 1:, :]  # [1, N, D]
-    # pos_embed = state_dict["mask_pos_token"].expand_as(pos_embed)
-    # state_dict["pos_embed"] = torch.cat([cls_pos_embed, pos_embed], dim=1)  # [1, N+1, D]
-    # OPTION 2: ZERO POS EMBED
-    # state_dict["pos_embed"] = torch.zeros_like(state_dict["pos_embed"])
-    state_dict = preprocess(ckpt)
-    model.load_state_dict(state_dict, strict=True)
-    return model
-
 CFG_FOLDER = Path("fabric_configs/experiment/hummingbird/model")
-MODEL = "partmae_v6_s"
-CKPT_PATH = Path("outputs/2025-06-17/10-52-57/last.ckpt")
-model_conf = OmegaConf.load(CFG_FOLDER / f"{MODEL}.yaml")
-model_conf.ckpt_path = CKPT_PATH
-model = hydra.utils.instantiate(model_conf, _convert_='all')["net"].eval().cuda()
+MODELS = [
+    "dino_b",
+    "cim_b",
+    "droppos_b",
+    "partmae_v5_b",
+    "partmae_v6_ep074_b",
+    "partmae_v6_ep099_b",
+    "partmae_v6_ep149_b",
+    "partmae_v6_b", # 199
+    "mae_b",
+    "part_v0",
+]
+MODEL = "partmae_v6_b"
+
+# Global model variable
+model = None
+
+
+def load_model(model_name: str):
+    """Load a model from its configuration file."""
+    global model
+    logging.info(f"Loading model: {model_name}")
+    assert model_name in MODELS, f"Model {model_name} not found in {MODELS}"
+    model_conf = OmegaConf.load(CFG_FOLDER / f"{model_name}.yaml")
+    model = (
+        hydra.utils.instantiate({"model": model_conf}, _convert_="all")["model"]["net"]
+        .eval()
+        .to(DEVICE)
+    )
+    logging.info(f"Model {model_name} loaded.")
+    return f"Model '{model_name}' loaded successfully."
+
+
+# Load initial model
+load_model(MODEL)
+
+
 # Initialize the model and configure sampler
-# model = load_model(RUN_FOLDER, CKPT_NAME).to(DEVICE).eval()
 
 
-def compute_sim(pilA: Image.Image, pilB: Image.Image):
+def compute_sim(pilA: Image.Image, pilB: Image.Image, temperature: float):
     # Preprocess and batch
     xA = transform(pilA).to(DEVICE)
     xB = transform(pilB).to(DEVICE)
@@ -70,15 +79,20 @@ def compute_sim(pilA: Image.Image, pilB: Image.Image):
         # l2 normalize features
         # remove cls token
         feats = feats[:, model.num_prefix_tokens :, :]  # [B, N, D]
-        feats = torch.nn.functional.normalize(feats, dim=-1) 
+        feats = torch.nn.functional.normalize(feats, dim=-1)
         # B N D
 
     # we're interested in seeing the distance (cosine) between patches in images A and B
     # not inside the same image.
-    # so the final similarity matrix should be: N N 
+    # so the final similarity matrix should be: N N
     # sim[i, j] = similarity between patch i in image A and patch j in image B
     featA, featB = feats[0], feats[1]  # each is [N, D]
-    sim = featA @ featB.t()  
+    sim = featA @ featB.t()
+
+    # Apply softmax with temperature
+    if temperature > 0:
+        sim = torch.nn.functional.softmax(sim / temperature, dim=-1)
+
     print(sim.shape)
     return sim.cpu().numpy()  # convert to numpy for further processing
 
@@ -88,7 +102,7 @@ def overlay_distance_heatmap(
     pilB: Image.Image, sim: np.ndarray, N: int, patch_idx_A: int
 ):
     grid_size = int(np.sqrt(N))
-    sim = sim[patch_idx_A] # get distances from patch A to all patches in B
+    sim = sim[patch_idx_A]  # get distances from patch A to all patches in B
     # revert distances so that 1 is close, 0 is far
     heat = sim.reshape(grid_size, grid_size)
     heat = (heat - heat.min()) / (heat.max() - heat.min() + 1e-8)
@@ -105,7 +119,7 @@ def overlay_distance_heatmap(
 
 # Gradio callback to update overlay
 # Accepts PatchSelector annotation dict and Image B (could be numpy or PIL)
-def update_overlay(annotation: dict, imageB):
+def update_overlay(annotation: dict, imageB, temperature: float):
     # annotation: {'image': array or PIL, 'patchIndex': int}
     logging.info(
         f"Received annotation : {tree_map_only(np.ndarray, lambda x: x.shape, annotation)}"
@@ -139,7 +153,7 @@ def update_overlay(annotation: dict, imageB):
     pilA = pilA.resize((IMG_SIZE, IMG_SIZE), Image.LANCZOS)
     pilB = pilB.resize((IMG_SIZE, IMG_SIZE), Image.LANCZOS)
 
-    sim = compute_sim(pilA, pilB)
+    sim = compute_sim(pilA, pilB, temperature)
     N = sim.shape[0]
 
     overlay = overlay_distance_heatmap(pilB, sim, N, idx)
@@ -163,6 +177,23 @@ with demo:
         Click on a patch in the grid to visualize distances on Image B.
         """
     )
+
+    with gr.Row():
+        model_dropdown = gr.Dropdown(MODELS, value=MODEL, label="Select Model")
+        model_load_status = gr.Textbox(
+            label="Model Status",
+            interactive=False,
+            value=f"Model '{MODEL}' loaded successfully.",
+        )
+
+    with gr.Row():
+        temperature_slider = gr.Slider(
+            minimum=0.01,
+            maximum=1.0,
+            value=0.1,
+            step=0.01,
+            label="Softmax Temperature",
+        )
 
     with gr.Row():
         with gr.Column():
@@ -202,13 +233,14 @@ with demo:
         outputs=[patch_selector],
     )
 
+    model_dropdown.change(fn=load_model, inputs=model_dropdown, outputs=model_load_status)
+
     # Update heatmap when a patch is selected
     patch_selector.patch_select(
         fn=update_overlay,
-        inputs=[patch_selector, imageB_input],
+        inputs=[patch_selector, imageB_input, temperature_slider],
         outputs=[overlay_output, info_box],
     )
 
 if __name__ == "__main__":
     demo.launch()
-

@@ -20,6 +20,7 @@ from hbird.hbird_eval import hbird_evaluation # type: ignore
 
 import timm  # noqa: F401
 from src.utils.io import validate_checkpoint
+import lightning as L
 
 
 def _convnext_patch_size(model: torch.nn.Module) -> int:
@@ -127,6 +128,7 @@ def setup_wandb_logging(cfg: DictConfig):
 @hydra.main(version_base="1.3", config_path="../fabric_configs/experiment/hummingbird", config_name="config")
 def main(cfg: DictConfig):
     run, step = setup_wandb_logging(cfg)
+    L.seed_everything(cfg.seed)
 
     # Build model from config
     model = instantiate(cfg.model, _convert_="all")["net"]

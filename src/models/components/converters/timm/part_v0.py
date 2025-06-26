@@ -17,11 +17,7 @@ def preprocess(state_dict):
         pass
 
     assert "cls_token" in state_dict
-    # state_dict.pop("cls_token", None)
-    # state_dict.pop("pos_embed", None) # Assuming positional embeddings are not used and should be removed
     state_dict["pos_embed"] = torch.zeros_like(state_dict["pos_embed"])
-    print(state_dict["pos_embed"].shape)
-    # exit(0)
     state_dict.pop("targets", None)
     state_dict.pop("clf.weight", None)
     state_dict.pop("clf.bias", None)
