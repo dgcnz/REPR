@@ -10,7 +10,7 @@
 
 module load 2024
 module load CUDA/12.6.0
-module load Anaconda3
+module load Anaconda3/2024.06-1
 
 cd $HOME/development/PART
 
@@ -22,6 +22,6 @@ export HYDRA_FULL_ERROR=1
 
 srun conda env create -f env.yaml
 
-module unload Anaconda3
+module unload Anaconda3/2024.06-1
 module unload CUDA/12.6.0
 module unload 2024
