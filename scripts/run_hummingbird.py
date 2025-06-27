@@ -18,6 +18,9 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 from hbird.hbird_eval import hbird_evaluation # type: ignore 
 
+import hbird
+hbird.utils.eval_metrics.USE_MIOU_V2 = True
+
 import timm  # noqa: F401
 from src.utils.io import validate_checkpoint
 import lightning as L
