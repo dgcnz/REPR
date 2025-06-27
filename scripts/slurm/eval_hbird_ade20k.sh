@@ -24,7 +24,8 @@ export HYDRA_FULL_ERROR=1
 
 conda run --no-capture-output -n eval python -m scripts.run_hummingbird \
 	data=ade20k \
-  	model=dino_b
+	'data.data_dir=/gpfs/scratch1/shared/dcanez/datasets/ade20k/ADEChallengeData2016' \
+  	model=dino_b 
 
 module unload Anaconda3/2024.06-1
 module unload CUDA/12.6.0

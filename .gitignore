@@ -183,3 +183,5 @@ docs/papers/
 *.pkl
 multirun
 *.pickle
+
+*.mp4
