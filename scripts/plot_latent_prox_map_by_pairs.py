@@ -43,6 +43,7 @@ NAMES = {
     "partmae_v6_b": "Ours",
     "partmae_v6_ep099_b": "Ours (Epoch 99)",
     "partmae_v6_ep074_b": "Ours (Epoch 74)",
+    "partmae_v5_b": r"Ours ($\mathcal{L}_{\rm pose}$ only)",
     "mae_b": "MAE",
     "part_v0": "PART",
 }
@@ -202,7 +203,8 @@ def generate_compact_grid_by_pairs(plot_data):
     # Remove spacing between subplots but keep some space for titles
     plt.subplots_adjust(wspace=0, hspace=0.1)
     
-    output_path = "scripts/output/latent_similarities_compact_grid_by_pairs.png"
+    output_path = "scripts/output/latent_similarities/compact_grid_by_pairs.png"
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(output_path, dpi=300, bbox_inches='tight', pad_inches=0)
     logging.info(f"Compact grid plot (by pairs) saved to {output_path}")
     plt.close()
@@ -224,6 +226,9 @@ TEXTURE_BIAS = {
     ],
     "cim_b": [
         ("scripts/inputs/samoyed_2.jpg", "scripts/inputs/retriever_snow.jpg", 52, 0.15),
+    ],
+    "partmae_v5_b": [
+        ("scripts/inputs/samoyed_2.jpg", "scripts/inputs/retriever_snow.jpg", 52, 0.2),
     ],
     "partmae_v6_b": [
         ("scripts/inputs/samoyed_2.jpg", "scripts/inputs/retriever_snow.jpg", 52, 0.02),
@@ -270,7 +275,7 @@ def main():
     Each row represents an image pair, and each column (after the first) represents a different model.
     """
     # plot_data = TEXTURE_BIAS
-    plot_data = POSITIONAL_BIAS
+    plot_data = TEXTURE_BIAS
     
     # Generate compact grid plot organized by pairs
     generate_compact_grid_by_pairs(plot_data)

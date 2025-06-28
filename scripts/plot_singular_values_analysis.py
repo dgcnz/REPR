@@ -11,9 +11,170 @@ from omegaconf import OmegaConf
 import hydra
 import logging
 import einops
+from collections import defaultdict
 
-from src.utils.analysis.clmim_hook import ActivationCache
-from src.models.components.cl_vs_mim.utils import subsample
+
+# Inlined from src.utils.analysis.clmim_hook
+def get_layer(model, layer_name: str):
+    layers = layer_name.split(".")
+    for layer in layers:
+        if layer.isnumeric():
+            model = model[int(layer)]
+        elif hasattr(model, layer):
+            model = getattr(model, layer)
+        else:
+            raise ValueError(f"Layer {layer} not found in {model}")
+    return model
+
+
+def clean_tensor(tensor):
+    if isinstance(tensor, torch.Tensor):
+        return tensor.detach().cpu()
+    elif isinstance(tensor, tuple):
+        return tuple(clean_tensor(t) for t in tensor)
+    elif isinstance(tensor, list):
+        return [clean_tensor(t) for t in tensor]
+    elif isinstance(tensor, dict):
+        return {k: clean_tensor(v) for k, v in tensor.items()}
+    else:
+        return tensor
+
+
+class ActivationCache(object):
+    def __init__(self, head_name: str = "head"):
+        self.cache = defaultdict(dict)
+        self.hooks = {}
+        self.head_name = head_name
+        self.logger = logging.getLogger(__name__)
+
+    def clear(self):
+        self.cache = {}
+
+    def _hook_fn(self, layer_name: str):
+        def hook_fn(module, input, output):
+            self.cache[layer_name]["input"] = clean_tensor(input)
+            self.cache[layer_name]["output"] = clean_tensor(output)
+
+        return hook_fn
+
+    def hook_layer(self, model, layer_name: str):
+        layer = get_layer(model, layer_name)
+        # print(f"Hooking {layer_name}")
+        self.logger.debug(f"Hooking {layer_name}: {layer.__class__}")
+        hook = layer.register_forward_hook(self._hook_fn(layer_name))
+        return hook
+
+    def hook(self, model):
+        # get Attention params: H, D
+        self.H = model.blocks[0].attn.num_heads
+        self.D = model.blocks[0].attn.proj.weight.shape[0]  # (D, D)
+
+        # hook the layers
+        self.n_blocks = len(model.blocks)
+        for i in range(self.n_blocks):
+            # deactivate fused_attn to get access to the individual components
+            model.blocks[i].attn.fused_attn = False
+            for layer_name in self._hooked_layers_per_block(i):
+                self.hooks[layer_name] = self.hook_layer(model, layer_name)
+
+        # hook the head
+        self.hooks[self.head_name] = self.hook_layer(model, self.head_name)
+        # self.hooks[''] = model.register_forward_hook(self._hook_fn(''))
+
+    def get_attn_ft(self, block_idx: int):
+        proj_input = self.cache[f"blocks.{block_idx}.attn.proj"]["input"][0]
+        B, N, _ = proj_input.shape
+
+        # attn_ft: B, H, N, C//H
+        # proj_input = attn_ft.transpose(1, 2).reshape(B, N, C)
+        # reverse operation
+        attn_ft = proj_input.reshape(B, N, self.H, self.D // self.H).transpose(1, 2)
+        return attn_ft
+
+    def get_attn(self, block_idx: int):
+        return self.cache[f"blocks.{block_idx}.attn.attn_drop"]["output"]
+
+    def get_attns(self):
+        attns = []
+        for idx in range(self.n_blocks):
+            attns.append(self.get_attn(idx))
+        return attns
+
+    def get_zs(self):
+        # zs: 0 = input of first block, same as input of first norm1
+        # zs: i = input of norm2 of block i // 2 + 1
+        # zs: i+1 = output of block i // 2 + 2, same as input of norm1 of the next block :0
+        # zs: n = output of head, same as output of model
+        zs = []
+        zs.append(self.cache["blocks.0"]["input"][0])
+        for idx in range(self.n_blocks):
+            """
+            class Block:
+                def forward(self, x: torch.Tensor) -> torch.Tensor:
+                    x = x + self.drop_path1(self.ls1(self.attn(self.norm1(x))))
+                    ---> hook on this x
+                    x = x + self.drop_path2(self.ls2(self.mlp(self.norm2(x))))
+                    ---> hook on this x
+                    return x
+            """
+            z1 = self.cache[f"blocks.{idx}.norm2"]["input"][0]
+            # zs.append(self.cache[f'blocks.{idx}']['output'])
+            #   This works too for standard timm ViTs,
+            #   but not for custom Blocks that output multiple tensors,
+            #   like the cl_vs_mim ViT
+            mlp_output = self.cache[f"blocks.{idx}.mlp"]["output"]
+            z2 = mlp_output + z1
+            zs.extend([z1, z2])
+
+        # TODO: careful, this could change depending on the model
+        # zs.append(self.cache['']['output'])
+        try:
+            zs.append(self.cache[self.head_name]["output"])
+        except KeyError:
+            self.logger.warning("Head output not found in cache. Appending None.")
+            zs.append(None)
+        return zs
+
+    @staticmethod
+    def _hooked_layers_per_block(i):
+        return [
+            f"blocks.{i}",  # input -> zs[0]
+            f"blocks.{i}.norm2",  # input -> zs[i]
+            f"blocks.{i}.mlp",  # output + zs[i] -> zs[i+1]
+            f"blocks.{i}.attn.attn_drop",  # output -> attn
+            f"blocks.{i}.attn.proj",  # input -> attn_ft
+        ]
+
+    def unhook(self):
+        for hook in self.hooks.values():
+            hook.remove()
+        self.hooks = {}
+
+
+# Inlined from src.models.components.cl_vs_mim.utils
+def subsample(dataset, ratio, random=False):
+    """
+    Get indices of subsampled dataset with given ratio.
+    """
+    idxs = list(range(len(dataset)))
+    idxs_sorted = {}
+    for idx, target in zip(idxs, dataset.targets):
+        if target in idxs_sorted:
+            idxs_sorted[target].append(idx)
+        else:
+            idxs_sorted[target] = [idx]
+
+    for idx in idxs_sorted:
+        size = len(idxs_sorted[idx])
+        lenghts = (int(size * ratio), size - int(size * ratio))
+        if random:
+            idxs_sorted[idx] = torch.utils.data.random_split(idxs_sorted[idx], lenghts)[0]
+        else:
+            idxs_sorted[idx] = idxs_sorted[idx][:lenghts[0]]
+
+    idxs = [idx for idxs in idxs_sorted.values() for idx in idxs]
+    return idxs
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -23,14 +184,14 @@ torch.set_float32_matmul_precision('high')
 # Configuration
 DEVICE = "cuda"
 IMG_SIZE = 224
-BATCH_SIZE = 768
-NUM_WORKERS = 8
+BATCH_SIZE = 64  # Reduced from 384 to save memory
+NUM_WORKERS = 0
 
 # Spectrum plotting limits
 MAX_RANK_TOKEN = 196  # Token-level spectrum collapses around 196
 MAX_RANK_IMAGE = 49   # Image-level spectrum collapses around 50
-MAX_RANK_CLS = 768     # CLS-level spectrum likely similar to image-level
-SUBSAMPLE_RATIO = math.pow(2, -1)
+MAX_RANK_CLS = 384     # Reduced from 384 to save memory
+SUBSAMPLE_RATIO = math.pow(2, -3)  # Increased from -3 to -4 to use less data
 
 CFG_FOLDER = Path("fabric_configs/experiment/hummingbird/model")
 MODELS = [
@@ -85,7 +246,8 @@ def setup_dataset(imagenet_path="~/development/datasets/imagenette2-160"):
     dataset_test = datasets.ImageFolder(test_dir, transform_test)
     dataset_test = torch.utils.data.Subset(
         dataset_test, 
-        subsample(dataset_test, ratio=SUBSAMPLE_RATIO)  # use a subsampled batch
+        subsample(dataset_test, 
+                   ratio=SUBSAMPLE_RATIO)  # use a subsampled batch
     )
     print(f"SUBSAMPLED {SUBSAMPLE_RATIO} ratio, using {len(dataset_test)} samples")
 
@@ -94,61 +256,31 @@ def setup_dataset(imagenet_path="~/development/datasets/imagenette2-160"):
         num_workers=NUM_WORKERS, 
         batch_size=BATCH_SIZE,
         drop_last=True,  
+        pin_memory=True,
     )
     
     return dataset_test
 
 
-def get_imglvl_sings(latents):
-    """Get image-level singular values.
+def batch_cov(points):
+    """Compute covariance matrices for a batch of point sets.
     
     Args:
-        latents: List of tensors with shape (batch, n, c)
+        points: Tensor of shape (B, N, D) where B is batch size, N is number of points, D is dimension
     
     Returns:
-        List of singular values for each layer
+        Batch covariance matrices of shape (B, D, D)
     """
-    latents = [latent[:, 1:, :] for latent in latents]  # drop CLS
-    latents = [einops.reduce(latent, "b n c -> b c", "mean") for latent in latents]  # img lvl reprs
-    
-    sinvals = []
-    for i, latent in enumerate(latents):
-        latent = einops.rearrange(latent, "b c -> c b")
-        cov = torch.cov(latent)
-        u, s, v = torch.svd(cov)
-        s = s.log()
-        sinvals.append(s)
-        
-    return sinvals
+    B, N, D = points.size()
+    mean = points.mean(dim=1).unsqueeze(1)
+    diffs = (points - mean).reshape(B * N, D)
+    prods = torch.bmm(diffs.unsqueeze(2), diffs.unsqueeze(1)).reshape(B, N, D, D)
+    bcov = prods.sum(dim=1) / (N - 1)  # Unbiased estimate
+    return bcov  # (B, D, D)
 
 
-def get_tknlvl_sings(latents):
-    """Get token-level singular values.
-    
-    Args:
-        latents: List of tensors with shape (batch, n, c)
-    
-    Returns:
-        Tensor of averaged singular values with shape (depth, c)
-    """
-    latents = [latent[:, 1:, :] for latent in latents]  # drop CLS
-    sinvals = [[] for _ in range(len(latents))]
-
-    for i, latent in enumerate(latents):
-        for j, _latent in enumerate(latent):
-            _latent = einops.rearrange(_latent, "n c -> c n")  # tkn lvl reprs
-            cov = torch.cov(_latent)
-            u, s, v = torch.svd(cov)
-            s = s.log()
-            sinvals[i].append(s)
-    
-    # Use einops reduce as in the original pseudocode
-    sinvals = einops.reduce(sinvals, "d m c -> d c", "mean")
-    return sinvals
-
-
-def extract_model_features(model, dataset_test, label):
-    """Extract features from all layers of a model once.
+def extract_and_compute_singular_values(model, dataset_test, label):
+    """Extract features and compute singular values on-the-fly to save memory.
     
     Args:
         model: The model to analyze
@@ -156,341 +288,159 @@ def extract_model_features(model, dataset_test, label):
         label: Model label
     
     Returns:
-        List of tensors, each with shape (total_batch, n_tokens, features)
+        Dictionary with analysis_type -> List of singular values for each layer
     """
+    logging.info(f"Starting integrated feature extraction and SVD computation for {label}")
     head_name = "clf" if label == "PARTv1_ft" else "head"
-    act = ActivationCache(head_name)
-    act.hook(model)
-    all_batch_features = []
+    logging.info(f"Activation hooks installed for {label}")
     
+    # Initialize accumulators for each analysis type
+    # For image/cls: accumulate representations to compute covariance later
+    # For token: accumulate singular values directly
+    image_accum = []  # List of lists: [layer][batch_representations]
+    cls_accum = []    # List of lists: [layer][batch_representations]
+    token_singular_values = []  # List of lists: [layer][batch_singular_values]
+    
+    n_layers = None
+    total_batches_processed = 0
+
+    logging.info(f"Dataset contains {len(dataset_test)} batches")
     for i, (xs, ys) in enumerate(dataset_test):
+        logging.info(f"Processing batch {i + 1}/{len(dataset_test)} for {label}")
+        act = ActivationCache(head_name)
+        act.hook(model)
         with torch.no_grad():
             xs = xs.to(DEVICE)
+            logging.info(f"Batch {i + 1}: Input tensor moved to {DEVICE}, shape: {xs.shape}")
             _ = model(xs)
-
+        
+        logging.info(f"Batch {i + 1}: Forward pass completed, extracting activations...")
         zs = act.get_zs()
         zs = zs[:-1]  # skips model output
+        # Only process every other layer to match ViT transformer blocks (skip intermediate activations)
+        zs = zs[::2]
+        logging.info(f"Batch {i + 1}: Extracted {len(zs)} ViT block activations (every 2nd layer)")
         
-        # Each element in zs has shape (batch, n_tokens, features)
-        all_batch_features.append(zs)
+        # Initialize accumulators on first batch
+        if n_layers is None:
+            n_layers = len(zs)
+            image_accum = [[] for _ in range(n_layers)]
+            cls_accum = [[] for _ in range(n_layers)]
+            token_singular_values = [[] for _ in range(n_layers)]
+            logging.info(f"Initialized accumulators for {n_layers} layers")
+            
+        # Process each layer immediately
+        logging.info(f"Batch {i + 1}: Processing {n_layers} layers...")
+        for layer_idx, layer_features in enumerate(zs):
+            logging.info(f"Batch {i + 1}, Layer {layer_idx}: Starting processing...")
+            # layer_features shape: (batch, n_tokens, features)
+            batch_size = layer_features.shape[0]
+            
+            # 1. Image-level: average spatial tokens (excluding CLS)
+            spatial_tokens = layer_features[:, 1:, :]  # drop CLS: (batch, n_spatial, features)
+            image_repr = einops.reduce(spatial_tokens, "b n c -> b c", "mean")  # (batch, features)
+            image_accum[layer_idx].append(image_repr.cpu())
+            logging.info(f"Batch {i + 1}, Layer {layer_idx}: Image-level repr computed and stored")
+            
+            # 2. CLS-level: extract CLS token
+            cls_repr = layer_features[:, 0, :]  # (batch, features)
+            cls_accum[layer_idx].append(cls_repr.cpu())
+            logging.info(f"Batch {i + 1}, Layer {layer_idx}: CLS-level repr computed and stored")
+            
+            # 3. Token-level: compute SVD for all samples in batch simultaneously
+            logging.info(f"Batch {i + 1}, Layer {layer_idx}: Starting batched token-level SVD for {batch_size} samples...")
+            
+            # Rearrange spatial tokens for batch covariance computation: (batch, features, n_spatial)
+            spatial_tokens_transposed = einops.rearrange(spatial_tokens, "b n c -> b c n")
+            
+            # Compute batch covariance matrices: (batch, features, features)
+            batch_cov_matrices = batch_cov(spatial_tokens_transposed)
+            
+            # Compute singular values only for all covariance matrices in the batch
+            s = torch.linalg.svdvals(batch_cov_matrices)  # s shape: (batch, min(features, features))
+            s = s.log().cpu()  # Apply log and move to CPU
+            
+            # Average singular values across batch
+            avg_singular_values = s.mean(dim=0)  # Average across batch dimension
+            token_singular_values[layer_idx].append(avg_singular_values)
+            logging.info(f"Batch {i + 1}, Layer {layer_idx}: Batched token-level SVD completed and averaged")
+            
+            # Detailed logging for first layer only to avoid spam
+            if layer_idx == 0:
+                logging.info(f"Batch {i + 1}, Layer {layer_idx} DETAILS: "
+                           f"spatial_tokens {spatial_tokens.shape}, "
+                           f"image_repr {image_repr.shape}, "
+                           f"cls_repr {cls_repr.shape}, "
+                           f"token SVD computed for {batch_size} samples")
+            
+            logging.info(f"Batch {i + 1}, Layer {layer_idx}: Processing completed")
         
-        if i >= 0:  # Process only one batch for speed (change to > 0 to process more)
-            break
+        # Clear cache and GPU memory after each batch
+        total_batches_processed += 1
+        logging.info(f"Batch {i + 1}: Cache cleared, GPU memory freed")
 
-    act.unhook()
+    logging.info(f"Processed {total_batches_processed} batches for {label}, hooks removed")
     
-    # Concatenate all batches across the batch dimension for each layer
-    # all_batch_features is a list of lists: [[layer0_batch0, layer1_batch0, ...], [layer0_batch1, layer1_batch1, ...], ...]
-    if len(all_batch_features) == 1:
-        # Only one batch, return as is
-        return all_batch_features[0]
-    else:
-        # Multiple batches, concatenate across batch dimension
-        n_layers = len(all_batch_features[0])
-        concatenated_features = []
-        for layer_idx in range(n_layers):
-            layer_batches = [batch[layer_idx] for batch in all_batch_features]
-            concatenated_layer = torch.cat(layer_batches, dim=0)  # Concatenate along batch dimension
-            concatenated_features.append(concatenated_layer)
-        return concatenated_features
-
-
-def compute_singular_values_from_features(features, analysis_type="image"):
-    """Compute singular values from pre-extracted features.
+    # Finalize computations
+    results = {}
+    logging.info(f"Starting final SVD computations for {label}...")
     
-    Args:
-        features: List of tensors, each with shape (batch, n_tokens, features)
-        analysis_type: Either "image", "token", or "cls" level analysis
+    # 1. Image-level: concatenate all batches and compute final covariance
+    logging.info("Computing image-level singular values...")
+    image_singular_values = []
+    for layer_idx in range(n_layers):
+        if image_accum[layer_idx]:
+            # Concatenate all batch representations
+            all_image_repr = torch.cat(image_accum[layer_idx], dim=0)  # (total_samples, features)
+            logging.info(f"Image-level Layer {layer_idx}: concatenated shape {all_image_repr.shape}")
+            all_image_repr = einops.rearrange(all_image_repr, "b c -> c b")
+            cov = torch.cov(all_image_repr)
+            logging.info(f"Image-level Layer {layer_idx}: covariance matrix shape {cov.shape}")
+            u, s, v = torch.svd(cov)
+            s = s.log()
+            image_singular_values.append(s)
+            logging.info(f"Image-level Layer {layer_idx}: computed {len(s)} singular values")
+    results["image"] = image_singular_values
+    logging.info(f"Image-level analysis complete: {len(image_singular_values)} layers")
     
-    Returns:
-        Singular values tensor
-    """
-    if analysis_type == "image":
-        return get_imglvl_sings(features)
-    elif analysis_type == "token":
-        return get_tknlvl_sings(features)
-    elif analysis_type == "cls":
-        return get_clslvl_sings(features)
-    else:
-        raise ValueError(f"Unknown analysis_type: {analysis_type}. Must be 'image', 'token', or 'cls'")
-
-
-def get_clslvl_sings(latents):
-    """Get CLS-level singular values.
+    # 2. CLS-level: concatenate all batches and compute final covariance
+    logging.info("Computing CLS-level singular values...")
+    cls_singular_values = []
+    for layer_idx in range(n_layers):
+        if cls_accum[layer_idx]:
+            # Concatenate all batch representations
+            all_cls_repr = torch.cat(cls_accum[layer_idx], dim=0)  # (total_samples, features)
+            logging.info(f"CLS-level Layer {layer_idx}: concatenated shape {all_cls_repr.shape}")
+            all_cls_repr = einops.rearrange(all_cls_repr, "b c -> c b")
+            cov = torch.cov(all_cls_repr)
+            logging.info(f"CLS-level Layer {layer_idx}: covariance matrix shape {cov.shape}")
+            u, s, v = torch.svd(cov)
+            s = s.log()
+            cls_singular_values.append(s)
+            logging.info(f"CLS-level Layer {layer_idx}: computed {len(s)} singular values")
+    results["cls"] = cls_singular_values
+    logging.info(f"CLS-level analysis complete: {len(cls_singular_values)} layers")
     
-    Args:
-        latents: List of tensors with shape (batch, n_tokens, c)
+    # 3. Token-level: average across all batches
+    logging.info("Finalizing token-level singular values...")
+    final_token_singular_values = []
+    for layer_idx in range(n_layers):
+        if token_singular_values[layer_idx]:
+            # Average singular values across all batches
+            avg_sv = torch.stack(token_singular_values[layer_idx]).mean(dim=0)
+            final_token_singular_values.append(avg_sv)
+            logging.info(f"Token-level Layer {layer_idx}: averaged {len(token_singular_values[layer_idx])} batch results, final shape {avg_sv.shape}")
+    results["token"] = final_token_singular_values
+    logging.info(f"Token-level analysis complete: {len(final_token_singular_values)} layers")
     
-    Returns:
-        List of singular values for each layer using CLS token only
-    """
-    # Use only CLS token (first token) as image-level representation
-    cls_latents = [latent[:, 0, :] for latent in latents]  # Extract CLS token: (batch, c)
-    
-    sinvals = []
-    for i, latent in enumerate(cls_latents):
-        latent = einops.rearrange(latent, "b c -> c b")
-        cov = torch.cov(latent)
-        u, s, v = torch.svd(cov)
-        s = s.log()
-        sinvals.append(s)
-        
-    return sinvals
-
-
-def plot_singular_values_comparison(dataset_test, model_names, analysis_type="image", 
-                                  output_path=None):
-    """Create singular values comparison plot for multiple models."""
-    if output_path is None:
-        output_path = f"scripts/output/svd/{analysis_type}_analysis.png"
-    
-    # Create output directory if it doesn't exist
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    # Create figure
-    fig, ax = plt.subplots(1, 1, figsize=(10, 6), dpi=150)
-
-    for model_name in model_names:
-        model = load_model(model_name)
-        # Extract features once
-        features = extract_model_features(model, dataset_test, model_name)
-        # Compute singular values from features
-        singular_values = compute_singular_values_from_features(features, analysis_type)
-        display_name = NAMES.get(model_name, model_name)
-        
-        # Plot the first singular value for each layer
-        if analysis_type in ["image", "cls"]:
-            # singular_values is a list of tensors
-            first_singular_per_layer = torch.stack([sv[0] for sv in singular_values])
-            ax.plot(range(len(first_singular_per_layer)), first_singular_per_layer.cpu(), 
-                   marker="o", label=display_name)
-        else:  # token level
-            # singular_values shape: (depth, c)
-            ax.plot(range(len(singular_values)), singular_values[:, 0].cpu(), 
-                   marker="o", label=display_name)
-
-    ax.set_xlabel("Depth")
-    ax.set_ylabel("Log Singular Value (First Component)")
-    ax.set_title(f"Singular Value Analysis - {analysis_type.title()} Level")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    
-    # Save plot
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    logging.info(f"Singular values {analysis_type} analysis plot saved to {output_path}")
-    plt.close()
+    logging.info(f"Completed singular value computation for {label}: "
+               f"image={len(results['image'])} layers, "
+               f"cls={len(results['cls'])} layers, "
+               f"token={len(results['token'])} layers")
+    return results
 
 
-def plot_all_models_singular_values(dataset_test, model_names, analysis_type="image", 
-                                   output_path=None):
-    """Create singular values plot with all models in the same plot."""
-    if output_path is None:
-        output_path = f"scripts/output/svd/{analysis_type}_all_models.png"
-    
-    # Create output directory if it doesn't exist
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    # Create figure
-    fig, ax = plt.subplots(1, figsize=(12, 8), dpi=150)
-    
-    # Plot for each model
-    for model_name in model_names:
-        model = load_model(model_name)
-        # Extract features once
-        features = extract_model_features(model, dataset_test, model_name)
-        # Compute singular values from features
-        singular_values = compute_singular_values_from_features(features, analysis_type)
-        display_name = NAMES.get(model_name, model_name)
-        
-        # Plot the first singular value for each layer
-        if analysis_type in ["image", "cls"]:
-            # singular_values is a list of tensors
-            first_singular_per_layer = torch.stack([sv[0] for sv in singular_values])
-            ax.plot(range(len(first_singular_per_layer)), first_singular_per_layer.cpu(), 
-                   marker="o", label=display_name, linewidth=2, markersize=6)
-        else:  # token level
-            # singular_values shape: (depth, c)
-            ax.plot(range(len(singular_values)), singular_values[:, 0].cpu(), 
-                   marker="o", label=display_name, linewidth=2, markersize=6)
-    
-    ax.set_xlabel("Depth", fontsize=14)
-    ax.set_ylabel("Log Singular Value (First Component)", fontsize=14)
-    ax.set_title(f"Singular Value Analysis - {analysis_type.title()} Level - All Models", fontsize=16)
-    ax.legend(fontsize=12, loc='best')
-    ax.grid(True, alpha=0.3)
-    ax.tick_params(axis='both', which='major', labelsize=12)
-    plt.tight_layout()
-    
-    # Save plot
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    logging.info(f"All models singular values {analysis_type} analysis plot saved to {output_path}")
-    plt.close()
-
-
-def plot_singular_values_heatmap(dataset_test, model_names, analysis_type="image", 
-                                output_path=None):
-    """Create a heatmap showing singular values across models and depths."""
-    if output_path is None:
-        output_path = f"scripts/output/svd/{analysis_type}_heatmap.png"
-    
-    # Create output directory if it doesn't exist
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    # Collect data for all models
-    all_singular_data = []
-    model_labels = []
-    
-    for model_name in model_names:
-        model = load_model(model_name)
-        # Extract features once
-        features = extract_model_features(model, dataset_test, model_name)
-        # Compute singular values from features
-        singular_values = compute_singular_values_from_features(features, analysis_type)
-        display_name = NAMES.get(model_name, model_name)
-        
-        # Use first singular value for each layer
-        if analysis_type in ["image", "cls"]:
-            # singular_values is a list of tensors
-            first_singular_per_layer = torch.stack([sv[0] for sv in singular_values])
-            singular_row = first_singular_per_layer.cpu()  # Shape: (depth,)
-        else:  # token level
-            # singular_values shape: (depth, c)
-            singular_row = singular_values[:, 0].cpu()  # Shape: (depth,)
-        
-        all_singular_data.append(singular_row)
-        model_labels.append(display_name)
-    
-    # Convert to numpy array for plotting
-    singular_matrix = torch.stack(all_singular_data).numpy()  # Shape: (n_models, depth)
-    
-    # Create heatmap
-    fig, ax = plt.subplots(1, figsize=(10, 8), dpi=150)
-    
-    im = ax.imshow(singular_matrix, aspect='auto', cmap='viridis', interpolation='nearest')
-    
-    # Set labels
-    ax.set_xlabel("Depth", fontsize=14)
-    ax.set_ylabel("Model", fontsize=14)
-    ax.set_title(f"Singular Values Heatmap - {analysis_type.title()} Level (First Component)", fontsize=16)
-    
-    # Set ticks
-    ax.set_yticks(range(len(model_labels)))
-    ax.set_yticklabels(model_labels)
-    ax.set_xticks(range(singular_matrix.shape[1]))
-    ax.set_xticklabels([f"{i}" for i in range(singular_matrix.shape[1])])
-    
-    # Add colorbar
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label('Log Singular Value', fontsize=12)
-    
-    plt.tight_layout()
-    
-    # Save plot
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    logging.info(f"Singular values {analysis_type} heatmap saved to {output_path}")
-    plt.close()
-
-
-def plot_singular_value_spectrum(dataset_test, model_names, analysis_type="image", 
-                                 output_path=None):
-    """Generate singular value spectrum plots like in the attachment."""
-    if output_path is None:
-        output_path = f"scripts/output/svd/{analysis_type}_spectrum.png"
-    
-    # Create output directory if it doesn't exist
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    
-    # Set max rank based on analysis type
-    if analysis_type == "image":
-        max_rank = MAX_RANK_IMAGE
-    elif analysis_type == "token":
-        max_rank = MAX_RANK_TOKEN
-    elif analysis_type == "cls":
-        max_rank = MAX_RANK_CLS
-    else:
-        max_rank = 100  # fallback
-    
-    # Calculate number of subplots needed
-    n_models = len(model_names)
-    n_cols = min(3, n_models)
-    n_rows = (n_models + n_cols - 1) // n_cols
-    
-    # Create figure
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows), dpi=150)
-    if n_models == 1:
-        axes = [axes]
-    elif n_rows == 1:
-        axes = axes
-    else:
-        axes = axes.flatten()
-    
-    # Create colormap for depth
-    cmap = plt.cm.get_cmap('viridis')
-    
-    # Plot for each model
-    for i, model_name in enumerate(model_names):
-        model = load_model(model_name)
-        # Extract features once
-        features = extract_model_features(model, dataset_test, model_name)
-        # Compute singular values from features
-        singular_values = compute_singular_values_from_features(features, analysis_type)
-        display_name = NAMES.get(model_name, model_name)
-        
-        ax = axes[i] if n_models > 1 else axes[0]
-        
-        # Plot full spectrum for each layer (depth) - use every other layer for ViT blocks
-        if analysis_type in ["image", "cls"]:
-            # singular_values is a list of tensors
-            # Use every other layer to match ViT block outputs (skip intermediate activations)
-            layer_indices = range(0, len(singular_values), 2)
-            n_plot_layers = len(layer_indices)
-            for i, layer_idx in enumerate(layer_indices):
-                color = cmap(i / (n_plot_layers - 1))
-                layer_values = singular_values[layer_idx].cpu()
-                
-                # Plot only up to max_rank
-                rank_indices = range(min(len(layer_values), max_rank))
-                ax.plot(rank_indices, layer_values[:max_rank], color=color, alpha=0.8, linewidth=1.5)
-        else:  # token level
-            # singular_values shape: (depth, c)
-            # Use every other layer to match ViT block outputs (skip intermediate activations)
-            layer_indices = range(0, len(singular_values), 2)
-            n_plot_layers = len(layer_indices)
-            for i, layer_idx in enumerate(layer_indices):
-                color = cmap(i / (n_plot_layers - 1))
-                layer_values = singular_values[layer_idx].cpu()
-                
-                # Plot only up to max_rank
-                rank_indices = range(min(len(layer_values), max_rank))
-                ax.plot(rank_indices, layer_values[:max_rank], color=color, alpha=0.8, linewidth=1.5)
-        
-        ax.set_xlabel("Rank index")
-        ax.set_ylabel("Δ Log singular value")
-        ax.set_title(f"{display_name}")
-        ax.grid(True, alpha=0.3)
-        
-        # Add colorbar for depth - use actual plotted layers count
-        if analysis_type in ["image", "cls"]:
-            n_plot_layers = len(range(0, len(singular_values), 2))
-        else:
-            n_plot_layers = len(range(0, len(singular_values), 2))
-        norm = plt.Normalize(vmin=0, vmax=n_plot_layers-1)
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-        sm.set_array([])
-        cbar = plt.colorbar(sm, ax=ax)
-        cbar.set_label('Depth (ViT blocks)')
-
-    # Hide unused subplots
-    for i in range(n_models, len(axes)):
-        axes[i].set_visible(False)
-
-    plt.tight_layout()
-    
-    # Save plot
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    logging.info(f"Singular values {analysis_type} spectrum plot saved to {output_path} (max rank: {max_rank})")
-    plt.close()
+# All the old plotting functions removed - they were duplicating computation!
 
 
 def plot_singular_values_from_cache(model_singular_values, analysis_type):
@@ -508,13 +458,13 @@ def plot_singular_values_from_cache(model_singular_values, analysis_type):
         if analysis_type in ["image", "cls"]:
             # singular_values is a list of tensors
             first_singular_per_layer = torch.stack([sv[0] for sv in singular_values])
-            # Use every other layer to match ViT block outputs (skip intermediate activations)
-            ax.plot(range(len(first_singular_per_layer[::2])), first_singular_per_layer[::2].cpu(), 
+            # No need for [::2] slicing since we already filtered during computation
+            ax.plot(range(len(first_singular_per_layer)), first_singular_per_layer.cpu(), 
                    marker="o", label=display_name)
         else:  # token level
-            # singular_values shape: (depth, c)  
-            # Use every other layer to match ViT block outputs (skip intermediate activations)
-            ax.plot(range(len(singular_values[::2])), singular_values[::2, 0].cpu(), 
+            # singular_values is a list of tensors (one per layer)
+            first_singular_per_layer = torch.stack([sv[0] for sv in singular_values])
+            ax.plot(range(len(first_singular_per_layer)), first_singular_per_layer.cpu(), 
                    marker="o", label=display_name)
 
     ax.set_xlabel("Depth")
@@ -584,7 +534,7 @@ def plot_singular_values_from_cache(model_singular_values, analysis_type):
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
         cbar = plt.colorbar(sm, ax=ax)
-        cbar.set_label('Depth')
+        cbar.set_label('Depth (ViT blocks)')
 
     for i in range(n_models, len(axes)):
         axes[i].set_visible(False)
@@ -604,31 +554,31 @@ def main():
     # Create output directory if it doesn't exist
     Path("scripts/output").mkdir(exist_ok=True)
     
-    # Extract features once for all models (this is the expensive part)
-    logging.info("Extracting features from all models...")
-    model_features = {}
+    # Process models one at a time and compute singular values immediately
+    logging.info("Processing models one at a time with integrated computation to save memory...")
+    model_singular_values = {"image": {}, "token": {}, "cls": {}}
+    
     for model_name in MODELS:
-        logging.info(f"Extracting features from {model_name}...")
+        logging.info(f"Processing {model_name}...")
+        
+        # Load model
         model = load_model(model_name)
-        features = extract_model_features(model, dataset_test, model_name)
-        model_features[model_name] = features
-        logging.info(f"Features extracted for {model_name}: {len(features)} layers, each with shape {features[0].shape}")
+        
+        # Extract features and compute singular values in one pass - no large tensor storage!
+        singular_values_dict = extract_and_compute_singular_values(model, dataset_test, model_name)
+        
+        # Store results for each analysis type
+        for analysis_type in ["image", "token", "cls"]:
+            model_singular_values[analysis_type][model_name] = singular_values_dict[analysis_type]
+            logging.info(f"Singular values computed for {model_name} {analysis_type}: stored {len(singular_values_dict[analysis_type])} layers")
+        
+        # Clear model memory immediately
+        del model
+        torch.cuda.empty_cache()
+        logging.info(f"Cleared model memory after processing {model_name}")
     
-    # Now compute all analysis types from the cached features
-    logging.info("Computing singular value analyses from cached features...")
-    model_singular_values = {}
-    
-    for analysis_type in ["image", "token", "cls"]:
-        model_singular_values[analysis_type] = {}
-        for model_name in MODELS:
-            logging.info(f"Computing {analysis_type}-level analysis for {model_name}...")
-            singular_values = compute_singular_values_from_features(
-                model_features[model_name], analysis_type
-            )
-            model_singular_values[analysis_type][model_name] = singular_values
-    
-    # Generate all plots from the cached results
-    logging.info("Generating plots from cached results...")
+    # Generate all plots from the cached singular values (much smaller data)
+    logging.info("Generating plots from cached singular values...")
     for analysis_type in ["image", "token", "cls"]:
         logging.info(f"Generating {analysis_type}-level plots...")
         
