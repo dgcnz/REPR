@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import torchvision.datasets as datasets
 import timm.data.transforms_factory as tff
 from torch.utils.data import DataLoader
+from timm.models.vision_transformer import VisionTransformer
 from omegaconf import OmegaConf
 import hydra
 import logging
@@ -21,8 +22,10 @@ logging.basicConfig(level=logging.INFO)
 # Configuration
 DEVICE = "cuda"
 IMG_SIZE = 224
-BATCH_SIZE = 64
-NUM_WORKERS = 1
+BATCH_SIZE = 128
+NUM_WORKERS = 8
+# DATA_SUBSAMPLE_RATIO = math.pow(2, -6)
+DATA_SUBSAMPLE_RATIO = math.pow(2, -4)
 
 CFG_FOLDER = Path("fabric_configs/experiment/hummingbird/model")
 MODELS = [
@@ -45,8 +48,8 @@ NAMES = {
     "part_v0": "PART",
 }
 
-# Global model variable
-model = None
+# Global model variable (timm's VisionTransformer)
+model: VisionTransformer = None
 
 
 def load_model(model_name: str):
@@ -77,7 +80,7 @@ def setup_dataset(imagenet_path="~/development/datasets/imagenette2-160"):
     dataset_test = datasets.ImageFolder(test_dir, transform_test)
     dataset_test = torch.utils.data.Subset(
         dataset_test, 
-        subsample(dataset_test, ratio=math.pow(2, -6))  # use a subsampled batch
+        subsample(dataset_test, ratio=DATA_SUBSAMPLE_RATIO)  # use a subsampled batch
     )
 
     dataset_test = DataLoader(
@@ -308,7 +311,7 @@ def main():
     """Main function to generate Fourier analysis plots."""
     # Setup dataset
     logging.info("Setting up dataset...")
-    dataset_test = setup_dataset()
+    dataset_test = setup_dataset("/mnt/sdb1/datasets/imagenette2")
     
     # Create output directory if it doesn't exist
     Path("scripts/output").mkdir(exist_ok=True)
