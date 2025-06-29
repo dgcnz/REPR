@@ -1,5 +1,0 @@
-defaults:
-  - loggers/metric_logger
-  - lr_monitor
-  - plotting
-

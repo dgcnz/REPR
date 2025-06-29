@@ -1,5 +1,0 @@
-defaults:
-  - output_cache
-  - loggers/reconstruction_logger
-  - loggers/transform_logger
-

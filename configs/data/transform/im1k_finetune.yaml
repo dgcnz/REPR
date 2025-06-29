@@ -1,9 +1,0 @@
-_target_: timm.data.create_transform
-input_size: 224
-is_training: True
-color_jitter: 0.4
-auto_augment: "rand-m9-mstd0.5-inc1"
-interpolation: "bicubic"
-re_prob: 0
-re_mode: "pixel"
-re_count: 1

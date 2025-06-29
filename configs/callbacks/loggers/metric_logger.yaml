@@ -1,3 +1,0 @@
-# @package callbacks
-metric_logger:
-  _target_: src.callbacks.MetricLogger

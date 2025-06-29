@@ -1,3 +1,0 @@
-_target_: torch.nn.SmoothL1Loss
-_partial_: true
-beta: 1.0

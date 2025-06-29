@@ -1,2 +1,0 @@
-_target_: torch.nn.L1Loss
-_partial_: true

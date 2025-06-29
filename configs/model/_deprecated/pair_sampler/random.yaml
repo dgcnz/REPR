@@ -1,3 +1,0 @@
-_target_: src.models.components.part_utils.random_pairs
-_partial_: true
-n_pairs: 4000

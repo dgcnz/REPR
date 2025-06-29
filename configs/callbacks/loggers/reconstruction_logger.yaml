@@ -1,5 +1,0 @@
-# @package callbacks
-reconstruction_logger:
-  _target_: src.callbacks.ReconstructionLogger
-  every_n_steps: -1
-  num_samples: 1

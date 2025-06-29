@@ -1,3 +1,0 @@
-output_cache: 
-  _target_: src.callbacks.OutputCache
-  num_samples: 1
