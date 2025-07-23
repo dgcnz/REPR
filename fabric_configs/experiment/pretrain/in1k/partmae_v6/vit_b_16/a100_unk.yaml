@@ -29,4 +29,3 @@ model:
   lambda_ccr: 0.0
   lambda_cinv: 0.0
   tau: 0 # no attn weighting
-  bypass_loss: true
