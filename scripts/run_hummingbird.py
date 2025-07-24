@@ -119,9 +119,6 @@ def setup_wandb_logging(cfg: DictConfig):
         # attach_artifact_if_missing(ckpt_path, run_id, project)
         run = wandb.init(
             project="PART-hummingbird",
-            group=run_id,
-            config=config,
-            name=f"{run_id}-{ckpt_step:07d}",
         )
         # run.use_artifact(f"dgcnz/PART-posttrain/{run_id}-model-{ckpt_path.stem}:v0", type="model")
         return run, ckpt_step

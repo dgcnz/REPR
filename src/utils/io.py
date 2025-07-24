@@ -4,14 +4,15 @@ import re
 import torch
 import os
 import yaml
+import logging
 
+logging.basicConfig(level=logging.INFO)
 
 def find_run_id(wandb_dir: Path) -> str:
     """Return the wandb run ID extracted from the wandb directory."""
     if not wandb_dir.exists() or not wandb_dir.is_dir():
-        raise FileNotFoundError(
-            f"Expected to find a 'wandb' folder at {wandb_dir}, but it does not exist."
-        )
+        logging.error(f"Expected to find a 'wandb' folder at {wandb_dir}, but it does not exist. Returning run_id as None.")
+        return None
 
     run_dirs = [
         p for p in wandb_dir.iterdir() if p.is_dir() and p.name.startswith("run-")

@@ -73,17 +73,7 @@ def main(cfg: DictConfig) -> None:
     if cfg.get("fp32", None) == "high":
         torch.set_float32_matmul_precision("high")
 
-    if cfg.restart and cfg.ckpt_path:
-        step, run_id, resume_cfg = validate_checkpoint(Path(cfg.ckpt_path))
-        run = wandb.init(
-            project="PART-linear-segmentation",
-            group=run_id,
-            name=f"{run_id}-{step:07d}",
-        )
-    else:
-        run = wandb.init(project="PART-linear-segmentation")
-        run_id = run.id
-        step = 0
+    run = wandb.init(project="PART-linear-segmentation")
 
     run_name = run.name
     run.config.update(
