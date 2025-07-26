@@ -24,8 +24,13 @@ train_dataloader:
   batch_size: 512
   num_workers: 16
 
+blr: 1e-5
 model:
+  lambda_pose: 1.0 # only pose
   bypass_loss: true
   lambda_ccr: 0.0
   lambda_cinv: 0.0
+  uncertainty_mode: additive # no uncertainty
+  gate_dim: 0 # no uncertainty
+  decoder_from_proj: true
   tau: 0 # no attn weighting
