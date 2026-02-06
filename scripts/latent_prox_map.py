@@ -37,6 +37,8 @@ MODELS = [
     "partmae_v6_ep099_b",
     "partmae_v6_ep149_b",
     "partmae_v6_b", # 199
+    "partmae_v6_b_noscale",
+    "partmae_v6_b_unk",
     "mae_b",
     "part_v0",
 ]
@@ -188,9 +190,9 @@ with demo:
 
     with gr.Row():
         temperature_slider = gr.Slider(
-            minimum=0.01,
+            minimum=0,
             maximum=1.0,
-            value=0.1,
+            value=0,
             step=0.01,
             label="Softmax Temperature",
         )

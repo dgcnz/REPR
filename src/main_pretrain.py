@@ -26,6 +26,7 @@ log = pylogger.RankedLogger(__name__)
 
 OmegaConf.register_new_resolver("eval", eval)
 
+
 def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
     # Set seed for reproducibility
     if cfg.get("seed"):
@@ -108,10 +109,7 @@ def setup(cfg: DictConfig) -> Tuple[Fabric, Dict[str, Any]]:
     # Initialize optimizer
     log.info(f"Instantiating optimizer <{cfg.optimizer._target_}>")
 
-    optimizer = hydra.utils.instantiate(
-        cfg.optimizer,
-        model,
-    )()
+    optimizer = hydra.utils.instantiate(cfg.optimizer, model)()
 
     # Initialize scheduler
     scheduler = None
@@ -252,6 +250,7 @@ def main_train(cfg: DictConfig) -> None:
     metrics = dict(metric_collection.metrics)
 
     return metrics, {}
+
 
 def main_eval(cfg: DictConfig):
     # run eval if specified

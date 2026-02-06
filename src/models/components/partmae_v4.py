@@ -253,14 +253,6 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         x = self.decoder_pred(x)
         return {"pose_pred": x[:, 1:, :]}  # [B*n_views, N_vis, 4]
 
-    # --- Ground Truth Computation using Canonical Mapping ---
-    # Here, each crop is assumed to be of fixed size self.img_size (e.g., 224),
-    # and the canonical image size is self.canonical_img_size (e.g., 512).
-    # The augmentation parameters (y, x, h, w) specify the crop in canonical coordinates.
-    # A patch at coordinate pos in the crop is mapped to canonical coordinates as:
-    #    canonical_pos = (y, x) + (pos / self.img_size) * (h, w)
-    # Ground truth differences are then computed in canonical coordinates and normalized by self.canonical_img_size.
-
     def _forward_branch(
         self, x: Float[Tensor, "B V C H W"], params: Float[Tensor, "B V 8"]
     ):
@@ -309,7 +301,7 @@ class PARTMaskedAutoEncoderViT(nn.Module):
         )
         if self.verbose:
             out["g_patch_positions_vis"] = g_out["patch_positions_vis"]
-            out["l_patch_positions_vis"] = l_out["patch_positions_vis"] 
+            out["l_patch_positions_vis"] = l_out["patch_positions_vis"]
             out["g_ids_remove_pos"] = g_out["ids_remove_pos"]
             out["l_ids_remove_pos"] = l_out["ids_remove_pos"]
 
