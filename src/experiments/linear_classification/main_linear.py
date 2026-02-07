@@ -1,6 +1,7 @@
 import hydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
+from pathlib import Path
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
@@ -13,7 +14,7 @@ from torchmetrics.classification import MulticlassAccuracy
 from torchmetrics.aggregation import MaxMetric
 from torchmetrics.wrappers.abstract import WrapperMetric
 
-from src.utils import pylogger
+from src.utils import pylogger, checkpointer
 
 torch.set_float32_matmul_precision("high")
 
@@ -268,6 +269,8 @@ def main(cfg: DictConfig) -> None:
     :param cfg: Hydra configuration composed from ``config.yaml``.
     """
     log.info(OmegaConf.to_yaml(cfg))
+    output_dir = Path(cfg.paths.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     run = wandb.init(project="PART-linear-classification")
     run.config.update({"tags": cfg.get("tags", [])}, allow_val_change=True)
     logger = WandbLogger(experiment=run)
@@ -323,6 +326,7 @@ def main(cfg: DictConfig) -> None:
     train_metrics = TrainMetrics(cfg.data.num_labels).to(fabric.device)
     val_metrics = ValMetrics(cfg.data.num_labels).to(fabric.device)
     best_val_metrics = BestValMetrics().to(fabric.device)
+    best_ckpt_top1 = float("-inf")
     global_step = 0
     for epoch in range(cfg.train.epochs):
         global_step = train_one_epoch(
@@ -339,7 +343,7 @@ def main(cfg: DictConfig) -> None:
         )
         scheduler.step()
         if epoch % cfg.train.val_freq == 0 or epoch == cfg.train.epochs - 1:
-            run_validation(
+            val_scores = run_validation(
                 backbone=backbone,
                 classifier=classifier,
                 loader=val_loader,
@@ -350,6 +354,37 @@ def main(cfg: DictConfig) -> None:
                 epoch=epoch,
                 global_step=global_step,
             )
+            if (
+                cfg.train.get("save_best", True)
+                and fabric.is_global_zero
+                and val_scores["val/top-1-acc"] > best_ckpt_top1
+            ):
+                best_ckpt_top1 = val_scores["val/top-1-acc"]
+                checkpointer.save_checkpoint(
+                    fabric=fabric,
+                    model=classifier,
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    global_step=global_step,
+                    filepath=str(output_dir / "classifier_best.ckpt"),
+                    scheduler=scheduler,
+                    val_scores=val_scores,
+                    feat_dim=int(cfg.model.feat_dim),
+                    num_labels=int(cfg.data.num_labels),
+                )
+
+    if cfg.train.get("save_last", True) and fabric.is_global_zero:
+        checkpointer.save_checkpoint(
+            fabric=fabric,
+            model=classifier,
+            optimizer=optimizer,
+            epoch=cfg.train.epochs - 1,
+            global_step=global_step,
+            filepath=str(output_dir / "classifier_last.ckpt"),
+            scheduler=scheduler,
+            feat_dim=int(cfg.model.feat_dim),
+            num_labels=int(cfg.data.num_labels),
+        )
 
     log.info(
         "Training finished. Best accuracy: {:.2f}".format(

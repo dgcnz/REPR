@@ -9,6 +9,8 @@ train:
   epochs: 25
   val_freq: 1
   log_freq: 10
+  save_best: true
+  save_last: true
   accelerator: gpu
   devices: 1
   precision: null
