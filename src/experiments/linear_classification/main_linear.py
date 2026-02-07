@@ -14,14 +14,13 @@ from torchmetrics.aggregation import MaxMetric
 from torchmetrics.wrappers.abstract import WrapperMetric
 
 from src.utils import pylogger
-import torch.backends.cudnn as cudnn
 
-cudnn.benchmark = True
-torch.set_float32_matmul_precision('high')
+torch.set_float32_matmul_precision("high")
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
 
 OmegaConf.register_new_resolver("eval", eval)
+
 
 class LinearClassifier(nn.Module):
     """Linear layer to train on top of frozen features."""
@@ -68,7 +67,9 @@ class TrainMetrics(WrapperMetric):
             }
         )
 
-    def update(self, preds: torch.Tensor, targets: torch.Tensor, loss: torch.Tensor) -> None:
+    def update(
+        self, preds: torch.Tensor, targets: torch.Tensor, loss: torch.Tensor
+    ) -> None:
         self.metrics["train/loss"].update(loss)
         self.metrics["train/acc"].update(preds, targets)
 
@@ -143,18 +144,14 @@ class BestValMetrics(WrapperMetric):
             "sync_on_compute": sync_on_compute,
         }
 
-        self.metrics = nn.ModuleDict(
-            {"val/best-top-1-acc": MaxMetric(**mean_kwargs)}
-        )
+        self.metrics = nn.ModuleDict({"val/best-top-1-acc": MaxMetric(**mean_kwargs)})
 
     def update(self, val_scores: dict[str, float]) -> None:
         self.metrics["val/best-top-1-acc"].update(val_scores["val/top-1-acc"])
 
     def compute(self) -> dict[str, float]:
         return {
-            "val/best-top-1-acc": float(
-                self.metrics["val/best-top-1-acc"].compute()
-            )
+            "val/best-top-1-acc": float(self.metrics["val/best-top-1-acc"].compute())
         }
 
 
@@ -249,10 +246,10 @@ def run_validation(
     log.info(
         "Epoch {}: val loss {:.4f} top1 {:.2f} top5 {:.2f} best {:.2f}".format(
             epoch,
-            current_scores['val/loss'],
-            current_scores['val/top-1-acc'],
-            current_scores['val/top-5-acc'],
-            best_scores['val/best-top-1-acc']
+            current_scores["val/loss"],
+            current_scores["val/top-1-acc"],
+            current_scores["val/top-5-acc"],
+            best_scores["val/best-top-1-acc"],
         )
     )
     if fabric.is_global_zero:
@@ -356,7 +353,7 @@ def main(cfg: DictConfig) -> None:
 
     log.info(
         "Training finished. Best accuracy: {:.2f}".format(
-            best_val_metrics.compute()['val/best-top-1-acc']
+            best_val_metrics.compute()["val/best-top-1-acc"]
         )
     )
 
