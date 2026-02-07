@@ -2,13 +2,11 @@
 # Utility module for checkpoint saving and loading operations
 
 import os
-import torch
 import sys
-import wandb
-from typing import Any, Dict, Optional, Union, Literal
-from pathlib import Path
+from typing import Any, Optional, Literal
+
+import torch
 from lightning import Fabric
-from lightning.fabric.wrappers import _unwrap_objects
 from torch import nn, optim
 
 from src.utils import pylogger

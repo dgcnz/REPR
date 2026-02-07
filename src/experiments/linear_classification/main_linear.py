@@ -5,14 +5,7 @@ from pathlib import Path
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
-from lightning.pytorch.loggers import WandbLogger
 import lightning as L  # Lightning Fabric
-import wandb
-from torchmetrics import MeanMetric
-from torchmetrics.classification import MulticlassAccuracy
-from torchmetrics.aggregation import MaxMetric
-from torchmetrics.wrappers.abstract import WrapperMetric
 
 from src.utils import pylogger, checkpointer
 
@@ -41,119 +34,11 @@ class LinearClassifier(nn.Module):
         return self.linear(x)
 
 
-class TrainMetrics(WrapperMetric):
-    """Aggregate training metrics."""
-
-    def __init__(
-        self,
-        num_classes: int,
-        nan_strategy: str = "disable",
-        sync_on_compute: bool = False,
-    ) -> None:
-        super().__init__()
-        mean_kwargs = {
-            "nan_strategy": nan_strategy,
-            "sync_on_compute": sync_on_compute,
-        }
-        acc_kwargs = {
-            "num_classes": num_classes,
-            "top_k": 1,
-            "sync_on_compute": sync_on_compute,
-        }
-
-        self.metrics = nn.ModuleDict(
-            {
-                "train/loss": MeanMetric(**mean_kwargs),
-                "train/acc": MulticlassAccuracy(**acc_kwargs),
-            }
-        )
-
-    def update(
-        self, preds: torch.Tensor, targets: torch.Tensor, loss: torch.Tensor
-    ) -> None:
-        self.metrics["train/loss"].update(loss)
-        self.metrics["train/acc"].update(preds, targets)
-
-    def reset(self) -> None:  # noqa: D401 - keep same signature
-        for m in self.metrics.values():
-            m.reset()
-
-    def compute(self) -> dict[str, float]:
-        return {
-            "train/loss": float(self.metrics["train/loss"].compute()),
-            "train/acc": float(self.metrics["train/acc"].compute()) * 100.0,
-        }
-
-
-class ValMetrics(WrapperMetric):
-    """Aggregate validation metrics."""
-
-    def __init__(
-        self,
-        num_classes: int,
-        nan_strategy: str = "disable",
-        sync_on_compute: bool = False,
-    ) -> None:
-        super().__init__()
-        mean_kwargs = {
-            "nan_strategy": nan_strategy,
-            "sync_on_compute": sync_on_compute,
-        }
-        acc_kwargs = {
-            "num_classes": num_classes,
-            "sync_on_compute": sync_on_compute,
-        }
-
-        self.metrics = nn.ModuleDict(
-            {
-                "val/loss": MeanMetric(**mean_kwargs),
-                "val/top-1-acc": MulticlassAccuracy(top_k=1, **acc_kwargs),
-                "val/top-5-acc": MulticlassAccuracy(top_k=5, **acc_kwargs),
-            }
-        )
-
-    def update(
-        self, preds: torch.Tensor, targets: torch.Tensor, loss: torch.Tensor
-    ) -> None:
-        self.metrics["val/loss"].update(loss)
-        self.metrics["val/top-1-acc"].update(preds, targets)
-        self.metrics["val/top-5-acc"].update(preds, targets)
-
-    def reset(self) -> None:  # noqa: D401 - keep same signature
-        for m in self.metrics.values():
-            m.reset()
-
-    def compute(self) -> dict[str, float]:
-        return {
-            "val/loss": float(self.metrics["val/loss"].compute()),
-            "val/top-1-acc": float(self.metrics["val/top-1-acc"].compute()) * 100.0,
-            "val/top-5-acc": float(self.metrics["val/top-5-acc"].compute()) * 100.0,
-        }
-
-
-class BestValMetrics(WrapperMetric):
-    """Track best validation metrics across epochs."""
-
-    def __init__(
-        self,
-        nan_strategy: str = "disable",
-        sync_on_compute: bool = False,
-    ) -> None:
-        super().__init__()
-        mean_kwargs = {
-            "nan_strategy": nan_strategy,
-            "sync_on_compute": sync_on_compute,
-        }
-
-        self.metrics = nn.ModuleDict({"val/best-top-1-acc": MaxMetric(**mean_kwargs)})
-
-    def update(self, val_scores: dict[str, float]) -> None:
-        self.metrics["val/best-top-1-acc"].update(val_scores["val/top-1-acc"])
-
-    def compute(self) -> dict[str, float]:
-        return {
-            "val/best-top-1-acc": float(self.metrics["val/best-top-1-acc"].compute())
-        }
+@torch.no_grad()
+def _top1_correct(output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Return number of correct top-1 predictions."""
+    pred = output.argmax(dim=1)
+    return pred.eq(target).sum()
 
 
 def train_one_epoch(
@@ -162,9 +47,9 @@ def train_one_epoch(
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     inference_fn: callable,
-    metrics: TrainMetrics,
     fabric: L.Fabric,
     global_step: int,
+    steps_per_epoch: int,
     log_freq: int = 10,
     epoch: int = 0,
 ) -> int:
@@ -175,34 +60,51 @@ def train_one_epoch(
     :param loader: Dataloader providing training images and labels.
     :param optimizer: Optimizer for ``classifier`` parameters.
     :param inference_fn: Function extracting features from ``backbone``.
-    :param metrics: Metric aggregator updated during training.
     :param fabric: Lightning Fabric handler.
     :param global_step: Current global step.
+    :param steps_per_epoch: Number of training iterations per epoch.
     :param log_freq: Log train metrics every N steps (<=0 disables).
     :param epoch: Current epoch index.
     :returns: Updated global step after the epoch.
     """
     criterion = nn.CrossEntropyLoss()
     classifier.train()
-    metrics.reset()
-    train_iter = tqdm(
-        loader,
-        desc=f"Train {epoch}",
-        disable=not fabric.is_global_zero,
-    )
-    for imgs, target in train_iter:
-        with torch.no_grad():
+
+    window_loss_sum = torch.tensor(0.0, device=fabric.device)
+    window_correct1 = torch.tensor(0, device=fabric.device, dtype=torch.long)
+    window_count = torch.tensor(0, device=fabric.device, dtype=torch.long)
+
+    for itr, (imgs, target) in enumerate(loader, start=1):
+        with torch.no_grad(), fabric.autocast():
             feats = inference_fn(backbone, imgs)
-        output = classifier(feats)
-        loss = criterion(output, target)
+        with fabric.autocast():
+            output = classifier(feats)
+            loss = criterion(output, target)
+
         fabric.backward(loss)
         optimizer.step()
-        optimizer.zero_grad()
-        metrics.update(output.detach(), target, loss.detach())
-        should_log = log_freq > 0 and (global_step % log_freq == 0)
-        if fabric.is_global_zero and should_log:
-            fabric.log_dict(metrics.compute(), step=global_step)
+        optimizer.zero_grad(set_to_none=True)
+
+        batch_size = int(target.shape[0])
+        window_loss_sum += loss.detach() * batch_size
+        window_correct1 += _top1_correct(output.detach(), target)
+        window_count += batch_size
+
         global_step += 1
+        should_log = fabric.is_global_zero and log_freq > 0 and (global_step % log_freq == 0)
+        if should_log:
+            num = int(window_count.item())
+            loss_avg = float(window_loss_sum.item() / max(1, num))
+            acc1 = float(window_correct1.item() * 100.0 / max(1, num))
+            lr = float(optimizer.param_groups[0]["lr"])
+            log.info(
+                "[%d, %5d/%5d] loss: %.4f acc1: %.2f lr: %.2e"
+                % (epoch + 1, itr, steps_per_epoch, loss_avg, acc1, lr)
+            )
+            window_loss_sum.zero_()
+            window_correct1.zero_()
+            window_count.zero_()
+
     return global_step
 
 
@@ -210,52 +112,47 @@ def run_validation(
     backbone: nn.Module,
     classifier: nn.Module,
     loader: DataLoader,
-    val_metrics: ValMetrics,
-    best_val_metrics: BestValMetrics,
     inference_fn: callable,
     fabric: L.Fabric,
     epoch: int,
-    global_step: int,
 ) -> dict[str, float]:
     """Run validation and update best metrics.
 
     :param backbone: Frozen feature extractor.
     :param classifier: Linear classifier to evaluate.
     :param loader: Validation dataloader.
-    :param val_metrics: Metric aggregator for current epoch.
-    :param best_val_metrics: Tracker for best metrics across epochs.
     :param inference_fn: Feature extraction function.
     :returns: Dictionary with validation and best scores.
     """
     criterion = nn.CrossEntropyLoss()
     classifier.eval()
-    val_metrics.reset()
-    val_iter = tqdm(
-        loader,
-        desc="Val",
-        disable=not fabric.is_global_zero,
-    )
-    with torch.no_grad():
-        for imgs, target in val_iter:
+
+    loss_sum = torch.tensor(0.0, device=fabric.device)
+    correct1 = torch.tensor(0, device=fabric.device, dtype=torch.long)
+    count = torch.tensor(0, device=fabric.device, dtype=torch.long)
+    with torch.no_grad(), fabric.autocast():
+        for imgs, target in loader:
             feats = inference_fn(backbone, imgs)
             output = classifier(feats)
             loss = criterion(output, target)
-            val_metrics.update(output, target, loss)
-    current_scores = val_metrics.compute()
-    best_val_metrics.update(current_scores)
-    best_scores = best_val_metrics.compute()
+            batch_size = int(target.shape[0])
+            loss_sum += loss.detach() * batch_size
+            count += batch_size
+            correct1 += _top1_correct(output.detach(), target)
+
+    n = int(count.item())
+    scores = {
+        "val/loss": float(loss_sum.item() / max(1, n)),
+        "val/top-1-acc": float(correct1.item() * 100.0 / max(1, n)),
+    }
     log.info(
-        "Epoch {}: val loss {:.4f} top1 {:.2f} top5 {:.2f} best {:.2f}".format(
+        "Epoch {}: val loss {:.4f} top1 {:.2f}".format(
             epoch,
-            current_scores["val/loss"],
-            current_scores["val/top-1-acc"],
-            current_scores["val/top-5-acc"],
-            best_scores["val/best-top-1-acc"],
+            scores["val/loss"],
+            scores["val/top-1-acc"],
         )
     )
-    if fabric.is_global_zero:
-        fabric.log_dict({**current_scores, **best_scores}, step=global_step)
-    return {**current_scores, **best_scores}
+    return scores
 
 
 @hydra.main(
@@ -271,9 +168,6 @@ def main(cfg: DictConfig) -> None:
     log.info(OmegaConf.to_yaml(cfg))
     output_dir = Path(cfg.paths.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    run = wandb.init(project="PART-linear-classification")
-    run.config.update({"tags": cfg.get("tags", [])}, allow_val_change=True)
-    logger = WandbLogger(experiment=run)
 
     train_ds = instantiate(cfg.data.train)
     val_ds = instantiate(cfg.data.val)
@@ -312,21 +206,15 @@ def main(cfg: DictConfig) -> None:
         accelerator=cfg.train.accelerator,
         devices=cfg.train.devices,
         precision=cfg.train.precision,
-        loggers=logger,
     )
-    for logger in fabric._loggers:
-        logger.log_hyperparams(
-            OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True)
-        )
     fabric.seed_everything(cfg.train.seed)
+
+    steps_per_epoch = len(train_loader)
+
     classifier, optimizer = fabric.setup(classifier, optimizer)
     train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
     backbone = backbone.to(fabric.device)
-
-    train_metrics = TrainMetrics(cfg.data.num_labels).to(fabric.device)
-    val_metrics = ValMetrics(cfg.data.num_labels).to(fabric.device)
-    best_val_metrics = BestValMetrics().to(fabric.device)
-    best_ckpt_top1 = float("-inf")
+    best_val_top1 = float("-inf")
     global_step = 0
     for epoch in range(cfg.train.epochs):
         global_step = train_one_epoch(
@@ -335,9 +223,9 @@ def main(cfg: DictConfig) -> None:
             loader=train_loader,
             optimizer=optimizer,
             inference_fn=inference_fn,
-            metrics=train_metrics,
             fabric=fabric,
             global_step=global_step,
+            steps_per_epoch=steps_per_epoch,
             log_freq=cfg.train.log_freq,
             epoch=epoch,
         )
@@ -347,19 +235,16 @@ def main(cfg: DictConfig) -> None:
                 backbone=backbone,
                 classifier=classifier,
                 loader=val_loader,
-                val_metrics=val_metrics,
-                best_val_metrics=best_val_metrics,
                 inference_fn=inference_fn,
                 fabric=fabric,
                 epoch=epoch,
-                global_step=global_step,
             )
             if (
                 cfg.train.get("save_best", True)
                 and fabric.is_global_zero
-                and val_scores["val/top-1-acc"] > best_ckpt_top1
+                and val_scores["val/top-1-acc"] > best_val_top1
             ):
-                best_ckpt_top1 = val_scores["val/top-1-acc"]
+                best_val_top1 = val_scores["val/top-1-acc"]
                 checkpointer.save_checkpoint(
                     fabric=fabric,
                     model=classifier,
@@ -386,16 +271,8 @@ def main(cfg: DictConfig) -> None:
             num_labels=int(cfg.data.num_labels),
         )
 
-    log.info(
-        "Training finished. Best accuracy: {:.2f}".format(
-            best_val_metrics.compute()["val/best-top-1-acc"]
-        )
-    )
+    log.info("Training finished. Best accuracy: {:.2f}".format(best_val_top1))
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        if wandb.run:
-            wandb.finish()
+    main()
