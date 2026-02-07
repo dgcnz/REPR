@@ -1,0 +1,36 @@
+root: /home/diego.canez/datasets/in1k
+
+train:
+  _target_: torchvision.datasets.ImageFolder
+  root: ${..root}/train
+  transform:
+    _target_: torchvision.transforms.Compose
+    transforms:
+      - _target_: torchvision.transforms.RandomResizedCrop
+        size: 224
+      - _target_: torchvision.transforms.RandomHorizontalFlip
+      - _target_: torchvision.transforms.ToTensor
+      - _target_: torchvision.transforms.Normalize
+        mean: [0.485, 0.456, 0.406]
+        std: [0.229, 0.224, 0.225]
+
+val:
+  _target_: torchvision.datasets.ImageFolder
+  root: ${..root}/val
+  transform:
+    _target_: torchvision.transforms.Compose
+    transforms:
+      - _target_: torchvision.transforms.Resize
+        size: 256
+        interpolation: 3 # bicubic
+      - _target_: torchvision.transforms.CenterCrop
+        size: 224
+      - _target_: torchvision.transforms.ToTensor
+      - _target_: torchvision.transforms.Normalize
+        mean: [0.485, 0.456, 0.406]
+        std: [0.229, 0.224, 0.225]
+
+num_workers: 8
+pin_memory: true
+num_labels: 1000
+
