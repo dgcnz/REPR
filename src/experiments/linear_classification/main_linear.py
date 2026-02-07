@@ -167,6 +167,7 @@ def train_one_epoch(
     metrics: TrainMetrics,
     fabric: L.Fabric,
     global_step: int,
+    log_freq: int = 10,
     epoch: int = 0,
 ) -> int:
     """Run one training epoch.
@@ -179,6 +180,7 @@ def train_one_epoch(
     :param metrics: Metric aggregator updated during training.
     :param fabric: Lightning Fabric handler.
     :param global_step: Current global step.
+    :param log_freq: Log train metrics every N steps (<=0 disables).
     :param epoch: Current epoch index.
     :returns: Updated global step after the epoch.
     """
@@ -199,7 +201,8 @@ def train_one_epoch(
         optimizer.step()
         optimizer.zero_grad()
         metrics.update(output.detach(), target, loss.detach())
-        if fabric.is_global_zero:
+        should_log = log_freq > 0 and (global_step % log_freq == 0)
+        if fabric.is_global_zero and should_log:
             fabric.log_dict(metrics.compute(), step=global_step)
         global_step += 1
     return global_step
@@ -334,6 +337,7 @@ def main(cfg: DictConfig) -> None:
             metrics=train_metrics,
             fabric=fabric,
             global_step=global_step,
+            log_freq=cfg.train.log_freq,
             epoch=epoch,
         )
         scheduler.step()
