@@ -6,12 +6,15 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 import lightning as L  # Lightning Fabric
+import logging
 
 from src.utils import pylogger, checkpointer
 
 torch.set_float32_matmul_precision("high")
 
 log = pylogger.RankedLogger(__name__, rank_zero_only=True)
+logging.basicConfig(level=logging.INFO)
+
 
 OmegaConf.register_new_resolver("eval", eval)
 
@@ -91,7 +94,9 @@ def train_one_epoch(
         window_count += batch_size
 
         global_step += 1
-        should_log = fabric.is_global_zero and log_freq > 0 and (global_step % log_freq == 0)
+        should_log = (
+            fabric.is_global_zero and log_freq > 0 and (global_step % log_freq == 0)
+        )
         if should_log:
             num = int(window_count.item())
             loss_avg = float(window_loss_sum.item() / max(1, num))
