@@ -49,6 +49,7 @@ def train_one_epoch(
     classifier: nn.Module,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
     inference_fn: callable,
     fabric: L.Fabric,
     global_step: int,
@@ -86,6 +87,7 @@ def train_one_epoch(
 
         fabric.backward(loss)
         optimizer.step()
+        scheduler.step()
         optimizer.zero_grad(set_to_none=True)
 
         batch_size = int(target.shape[0])
@@ -205,7 +207,9 @@ def main(cfg: DictConfig) -> None:
     lr = cfg.train.blr * total_batch_size / 256
     log.info("Using learning rate: {:.6f}".format(lr))
     optimizer = torch.optim.SGD(classifier.parameters(), lr=lr, momentum=0.9)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, cfg.train.epochs)
+    steps_per_epoch = len(train_loader)
+    total_steps = int(cfg.train.epochs) * int(steps_per_epoch)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
 
     fabric = L.Fabric(
         accelerator=cfg.train.accelerator,
@@ -213,8 +217,6 @@ def main(cfg: DictConfig) -> None:
         precision=cfg.train.precision,
     )
     fabric.seed_everything(cfg.train.seed)
-
-    steps_per_epoch = len(train_loader)
 
     classifier, optimizer = fabric.setup(classifier, optimizer)
     train_loader, val_loader = fabric.setup_dataloaders(train_loader, val_loader)
@@ -227,6 +229,7 @@ def main(cfg: DictConfig) -> None:
             classifier=classifier,
             loader=train_loader,
             optimizer=optimizer,
+            scheduler=scheduler,
             inference_fn=inference_fn,
             fabric=fabric,
             global_step=global_step,
@@ -234,7 +237,6 @@ def main(cfg: DictConfig) -> None:
             log_freq=cfg.train.log_freq,
             epoch=epoch,
         )
-        scheduler.step()
         if epoch % cfg.train.val_freq == 0 or epoch == cfg.train.epochs - 1:
             val_scores = run_validation(
                 backbone=backbone,
