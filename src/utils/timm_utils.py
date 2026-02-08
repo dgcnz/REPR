@@ -97,8 +97,15 @@ def extract_vit_cls(
     :returns: Flattened CLS token features.
     """
     with torch.no_grad():
-        outs = model.get_intermediate_layers(imgs, n_last_blocks)
-    cls_tokens = [x[:, 0] for x in outs]
+        # timm.get_intermediate_layers defaults to returning only patch tokens and no final norm.
+        # For DINO-style linear probing, we want normalized CLS tokens.
+        outs = model.get_intermediate_layers(
+            imgs,
+            n_last_blocks,
+            return_prefix_tokens=True,
+            norm=True,
+        )
+    cls_tokens = [prefix[:, 0] for _, prefix in outs]
     return torch.cat(cls_tokens, dim=-1)
 
 
@@ -115,10 +122,15 @@ def extract_meanpool_cls(
     :returns: Flattened features.
     """
     with torch.no_grad():
-        outs = model.get_intermediate_layers(imgs, n_last_blocks)
-    cls_tokens = torch.cat([x[:, 0] for x in outs], dim=-1)
-    prefix = getattr(model, "num_prefix_tokens", 1)
-    mean_tokens = torch.mean(outs[-1][:, prefix:], dim=1)
+        outs = model.get_intermediate_layers(
+            imgs,
+            n_last_blocks,
+            return_prefix_tokens=True,
+            norm=True,
+        )
+    cls_tokens = torch.cat([prefix[:, 0] for _, prefix in outs], dim=-1)
+    patch_tokens = outs[-1][0]
+    mean_tokens = torch.mean(patch_tokens, dim=1)
     return torch.cat((cls_tokens, mean_tokens), dim=-1)
 
 
@@ -135,7 +147,11 @@ def extract_patch_meanpool(
     :returns: Flattened mean pooled patch tokens.
     """
     with torch.no_grad():
-        outs = model.get_intermediate_layers(imgs, n_last_blocks)
-    prefix = getattr(model, "num_prefix_tokens", 1)
-    return torch.mean(outs[-1][:, prefix:], dim=1)
-
+        outs = model.get_intermediate_layers(
+            imgs,
+            n_last_blocks,
+            return_prefix_tokens=True,
+            norm=True,
+        )
+    patch_tokens = outs[-1][0]
+    return torch.mean(patch_tokens, dim=1)
